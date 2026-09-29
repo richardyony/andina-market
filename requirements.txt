@@ -1,0 +1,6 @@
+# Generador de datos sintéticos y simulador de cambios (se ejecuta en tu PC)
+numpy>=1.26
+pandas>=2.1
+faker>=24.0
+pyodbc>=5.1
+python-dotenv>=1.0
