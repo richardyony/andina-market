@@ -4,7 +4,7 @@ Cada decisión incluye la alternativa descartada y el motivo. Este registro crec
 
 ## D-01. Ambiente: Azure free trial + Azure Databricks Premium
 
-- **Decisión:** usar una suscripción free trial de Azure (con posibilidad de pasarla a Pago por uso) y un workspace de Azure Databricks en tier Premium, en East US 2.
+- **Decisión:** usar una suscripción free trial de Azure (con posibilidad de pasarla a Pago por uso) y un workspace de Azure Databricks en tier Premium (`ws_richard`), en East US.
 - **Descartado: Databricks Free Edition.** Tiene restricciones de red saliente y de cuotas que ponen en riesgo la conexión JDBC con Azure SQL, que es el camino crítico del nivel 1.
 - **Descartado: Azure for Students.** No permite aumentar la cuota de vCPU y restringe las regiones y los tipos de VM.
 - **Mitigación de cuota:** las cuentas de prueba tienen de 4 a 6 vCPU regionales, así que el cómputo es **serverless** (notebooks, Jobs, Lakeflow Declarative Pipelines y SQL warehouse). Serverless corre en infraestructura gestionada por Databricks y no consume la cuota de la suscripción. El plan B es un cluster single node de 4 cores.
@@ -38,8 +38,16 @@ Cada decisión incluye la alternativa descartada y el motivo. Este registro crec
 - **Segmento:** existe solo como estado actual en la fuente. El historial SCD2 empieza con la primera ingesta.
 - **Contenido ficticio:** marcas y personas son ficticias; los nombres se generan con Faker.
 
-## D-06. Región de Azure SQL: Central US en lugar de East US 2
+## D-06. Región de Azure SQL: Central US en lugar de la región del workspace
 
 - **Decisión:** el servidor `sql-andina-cus` (base `andina_oltp`, oferta gratuita serverless) está en **Central US**, en el grupo de recursos `rg-andina-market`.
-- **Descartado: East US 2, la misma región del workspace.** Era la opción preferida porque evita el tráfico entre regiones, pero Azure tiene restringida la creación de servidores SQL nuevos en East US 2 y East US para esta suscripción (`RegionDoesNotAllowProvisioning`). Se puede pedir una excepción por soporte, pero no está garantizada y retrasa el nivel 0.
-- **Impacto:** la extracción JDBC desde Databricks cruza regiones. Con este volumen, el costo de salida de datos y la latencia adicional son despreciables. En producción, la fuente y el lakehouse estarían en la misma región, conectados por Private Endpoint.
+- **Descartado: East US, la misma región del workspace (y East US 2).** Era la opción preferida porque evita el tráfico entre regiones, pero Azure tiene restringida la creación de servidores SQL nuevos en East US y East US 2 para esta suscripción (`RegionDoesNotAllowProvisioning`). Se puede pedir una excepción por soporte, pero no está garantizada y retrasa el nivel 0.
+- **Impacto:** la extracción JDBC desde Databricks cruza regiones. Con este volumen, el costo de salida de datos y la latencia adicional son despreciables. Se validó que el cómputo serverless lee la base por JDBC. En producción, la fuente y el lakehouse estarían en la misma región, conectados por Private Endpoint.
+
+## D-07. Almacenamiento y organización en Unity Catalog
+
+- **Decisión:** una cuenta ADLS Gen2 propia (`standinamarket706`, contenedor `lakehouse`, East US) registrada en Unity Catalog mediante el Access Connector `ac-andina-market` (identidad administrada con *Storage Blob Data Contributor*), la credencial `cred_andina_lakehouse` y la ubicación externa `loc_andina_lakehouse`.
+- **Un catálogo por entorno:** `andina_dev` y `andina_prod`, cada uno con su propia raíz de almacenamiento. El código recibe el catálogo como parámetro y el bundle lo fija por target, así el mismo código se promueve sin cambios. Staging se omite por el tamaño del reto: se agregaría como un tercer catálogo y un tercer target.
+- **Esquemas por capa:** `landing`, `bronze`, `silver`, `gold`, `ml`, `genai`, más `ops` para el control de la ingesta (última versión de Change Tracking leída por tabla y registro de lotes). Separar `ops` evita mezclar metadatos operativos con datos de negocio y permite darle permisos distintos.
+- **Descartado: el catálogo por defecto del workspace (`ws_richard`).** Su almacenamiento vive en el grupo de recursos administrado por Databricks, así que se borra con el workspace y no se puede gobernar de forma independiente.
+- **Credenciales de la fuente:** en el secret scope `andina-sql` (`server`, `database`, `user`, `password`), nunca en el código.
