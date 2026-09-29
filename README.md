@@ -30,7 +30,7 @@ docs/               Decisiones de arquitectura y documentación de datos
 
 ### 1. Azure SQL Database
 
-1. Crea un servidor lógico y la base `andina_oltp` con la **oferta gratuita** (serverless, General Purpose) en la misma región del workspace. Activa la auto-pausa.
+1. Crea un servidor lógico y la base `andina_oltp` con la **oferta gratuita** (serverless, General Purpose), idealmente en la misma región del workspace. Activa la auto-pausa. En este reto el servidor es `sql-andina-cus`, en Central US, porque East US 2 no aceptaba servidores nuevos (ver [D-06](docs/decisiones.md)).
 2. En **Redes** del servidor:
    - agrega la IP de tu PC;
    - activa *Permitir que los servicios y recursos de Azure accedan a este servidor*. Es necesario porque el cómputo serverless de Databricks no tiene IP fija. En producción se reemplaza por Private Endpoint.

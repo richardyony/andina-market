@@ -37,3 +37,9 @@ Cada decisión incluye la alternativa descartada y el motivo. Este registro crec
 - **Totales:** `TotalAmount` no incluye el envío; es la suma de las líneas, salvo en los casos borde documentados.
 - **Segmento:** existe solo como estado actual en la fuente. El historial SCD2 empieza con la primera ingesta.
 - **Contenido ficticio:** marcas y personas son ficticias; los nombres se generan con Faker.
+
+## D-06. Región de Azure SQL: Central US en lugar de East US 2
+
+- **Decisión:** el servidor `sql-andina-cus` (base `andina_oltp`, oferta gratuita serverless) está en **Central US**, en el grupo de recursos `rg-andina-market`.
+- **Descartado: East US 2, la misma región del workspace.** Era la opción preferida porque evita el tráfico entre regiones, pero Azure tiene restringida la creación de servidores SQL nuevos en East US 2 y East US para esta suscripción (`RegionDoesNotAllowProvisioning`). Se puede pedir una excepción por soporte, pero no está garantizada y retrasa el nivel 0.
+- **Impacto:** la extracción JDBC desde Databricks cruza regiones. Con este volumen, el costo de salida de datos y la latencia adicional son despreciables. En producción, la fuente y el lakehouse estarían en la misma región, conectados por Private Endpoint.
