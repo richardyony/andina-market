@@ -92,7 +92,8 @@ Azure SQL (andina_oltp)                     Unity Catalog: <catalog> = andina_de
         │  01_extract_sqlserver_ct (JDBC)
         │  full la 1.ª vez / CHANGETABLE después
         ▼
- /Volumes/<catalog>/landing/sqlserver/<tabla>/<batch_id>/*.parquet
+ /Volumes/<catalog>/landing/sqlserver/<tabla>/to_v<versión>__<modo>__run_<batch_id>/*.parquet
+   (escrito en _staging/ y publicado completo; la marca de agua se guarda después)
         │  02_bronze_autoloader (Auto Loader, availableNow, checkpoint)
         ▼
  <catalog>.bronze.<tabla>   Delta append-only + _ct_version, _ct_operation, _batch_id,

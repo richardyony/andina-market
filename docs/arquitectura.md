@@ -76,6 +76,7 @@ sequenceDiagram
 
     J->>X: batch_id = run_id
     X->>O: leer última versión por tabla
+    X->>L: mayor versión ya publicada (recupera una marca no guardada)
     X->>S: CHANGE_TRACKING_CURRENT_VERSION() → versión de corte
     loop por cada tabla
         X->>S: columnas actuales (INFORMATION_SCHEMA)
@@ -84,8 +85,8 @@ sequenceDiagram
         else incremental
             X->>S: CHANGETABLE(CHANGES ...) LEFT JOIN tabla (I / U / D)
         end
-        X->>L: Parquet en sqlserver/{tabla}/{batch_id}/
-        X->>O: guardar versión de corte (solo después de escribir)
+        X->>L: Parquet en _staging, luego se mueve completo a sqlserver/{tabla}/to_v{versión}__...
+        X->>O: guardar versión de corte (solo después de publicar)
     end
     X->>O: registrar lote (filas, modo, cambios de esquema)
     J->>A: tarea siguiente
@@ -96,7 +97,7 @@ sequenceDiagram
     end
 ```
 
-Garantías: la extracción es *at-least-once* y la carga a bronze es *exactly-once*; silver deduplica por PK y `_ct_version` (D-09). Una columna nueva en la fuente se detecta, se registra y se agrega a bronze sin intervención (D-10).
+Garantías: cada rango de versiones se publica una sola vez en landing y cada archivo se carga una sola vez en bronze, aun con reintentos y caídas entre pasos; se probó forzando una falla (D-09). Una columna nueva en la fuente se detecta, se registra y se agrega a bronze sin intervención (D-10).
 
 ## 3. Infraestructura
 

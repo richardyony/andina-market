@@ -2,17 +2,24 @@
 # MAGIC %md
 # MAGIC # 01 · Extracción incremental Azure SQL → landing
 # MAGIC
-# MAGIC Lee `andina_oltp` por JDBC y deja cada lote como Parquet en
-# MAGIC `/Volumes/<catalog>/landing/sqlserver/<tabla>/<batch_id>/`.
+# MAGIC Lee `andina_oltp` por JDBC y publica cada lote como Parquet en
+# MAGIC `/Volumes/<catalog>/landing/sqlserver/<tabla>/to_v<versión>__<modo>__run_<batch_id>/`.
 # MAGIC
 # MAGIC - **Carga completa** la primera vez, si la versión guardada ya no es válida
 # MAGIC   (retención de Change Tracking vencida) o con `force_full = true`.
 # MAGIC - **Incremental** en las demás corridas: `CHANGETABLE(CHANGES ...)` desde la
-# MAGIC   última versión guardada, con INSERT, UPDATE y DELETE (los DELETE llegan solo con la PK).
-# MAGIC - La versión se guarda en `ops.ct_watermarks` **después** de escribir el lote:
-# MAGIC   si algo falla antes, la próxima corrida repite desde la versión anterior.
-# MAGIC   La extracción es *at-least-once*; bronze y silver deduplican por PK y `_ct_version`.
-# MAGIC - Cada tabla deja una fila en `ops.ingestion_log`, incluido si cambió el esquema de origen.
+# MAGIC   última versión extraída, con INSERT, UPDATE y DELETE (los DELETE llegan solo con la PK).
+# MAGIC
+# MAGIC **Idempotencia: cada rango de versiones se publica una sola vez (D-09).**
+# MAGIC 1. El lote se escribe en `_staging` y se mueve completo a landing: Auto Loader nunca
+# MAGIC    ve un lote a medias, y lo que quede en `_staging` de un intento fallido se descarta.
+# MAGIC 2. La carpeta se nombra por la versión de corte, no por corrida: un reintento nunca
+# MAGIC    sobrescribe un lote anterior.
+# MAGIC 3. La marca de agua (`ops.ct_watermarks`) se guarda después de publicar. Si el proceso
+# MAGIC    cae entre ambos pasos, la siguiente corrida toma la versión del último lote publicado,
+# MAGIC    así que no vuelve a extraer ese rango.
+# MAGIC
+# MAGIC Cada tabla deja una fila en `ops.ingestion_log`, incluido si cambió el esquema de origen.
 
 # COMMAND ----------
 
@@ -20,10 +27,14 @@ dbutils.widgets.text("catalog", "andina_dev")
 dbutils.widgets.text("tables", "")  # vacío = todas; ej. "Orders,Payments"
 dbutils.widgets.text("batch_id", "")  # el job pasa {{job.run_id}}
 dbutils.widgets.dropdown("force_full", "false", ["false", "true"])
+# Solo para pruebas de recuperación: nombre de una tabla de origen (ej. "Orders") que falla
+# después de publicar su lote y antes de guardar la marca de agua. El job no lo usa.
+dbutils.widgets.text("simulate_failure", "")
 
 # COMMAND ----------
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 
@@ -34,6 +45,7 @@ from fuentes import LANDING_VOLUME, SECRET_SCOPE, select_tables
 catalog = dbutils.widgets.get("catalog")
 tables = select_tables(dbutils.widgets.get("tables"))
 force_full = dbutils.widgets.get("force_full") == "true"
+simulate_failure = dbutils.widgets.get("simulate_failure").strip()
 batch_id = dbutils.widgets.get("batch_id") or "manual_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 print(f"catalog={catalog} batch_id={batch_id} force_full={force_full} tablas={[t['source'] for t in tables]}")
@@ -139,9 +151,33 @@ watermarks = {
 to_version = scalar("SELECT CHANGE_TRACKING_CURRENT_VERSION() AS v")
 print(f"Versión actual de Change Tracking: {to_version}")
 
+LANDING_ROOT = f"/Volumes/{catalog}/landing/{LANDING_VOLUME}"
+STAGING_ROOT = f"{LANDING_ROOT}/_staging"  # fuera de las carpetas que lee Auto Loader
+LOT_NAME = re.compile(r"^to_v(\d+)__")
+
 
 def quote(col: str) -> str:
     return f"[{col}]"
+
+
+def lot_name(to_v: int, mode: str) -> str:
+    """Nombre del lote: la versión de corte primero, así el lote se ordena y se reconoce."""
+    return f"to_v{to_v:012d}__{mode}__run_{batch_id}"
+
+
+def published_version(target: str):
+    """Mayor versión de corte ya publicada en landing para la tabla (None si no hay).
+
+    Un lote solo aparece en landing cuando está completo (se mueve desde _staging),
+    así que su nombre es una prueba de que esa versión ya se extrajo. Si el proceso
+    cayó antes de guardar la marca de agua, de aquí se recupera.
+    """
+    try:
+        entries = dbutils.fs.ls(f"{LANDING_ROOT}/{target}")
+    except Exception:  # noqa: BLE001 - la carpeta aún no existe
+        return None
+    versions = [int(m.group(1)) for e in entries if (m := LOT_NAME.match(e.name.rstrip("/")))]
+    return max(versions) if versions else None
 
 
 def extract(t: dict) -> dict:
@@ -168,18 +204,27 @@ def extract(t: dict) -> dict:
     added = [c for c in cols if c not in prev_cols]
     removed = [c for c in prev_cols if c not in cols]
 
+    # --- Desde qué versión seguir: la marca de agua o, si es mayor, el último lote
+    # publicado en landing (caso: el proceso cayó entre publicar y guardar la marca).
+    saved = wm.last_version if wm else None
+    published = published_version(target)
+    candidates = [v for v in (saved, published) if v is not None]
+    last = max(candidates) if candidates else None
+    recovered = published is not None and (saved is None or published > saved)
+
     # --- Modo de extracción
     min_valid = scalar(f"SELECT CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.{src}')) AS v")
     if min_valid is None:
         raise ValueError(f"Change Tracking no está activo en dbo.{src}")
     if force_full:
         mode, reason, from_version = "full", "force_full", None
-    elif wm is None:
+    elif last is None:
         mode, reason, from_version = "full", "primera extracción", None
-    elif wm.last_version < min_valid:
-        mode, reason, from_version = "full", f"versión {wm.last_version} < mínima válida {min_valid}", None
+    elif last < min_valid:
+        mode, reason, from_version = "full", f"versión {last} < mínima válida {min_valid}", None
     else:
-        mode, reason, from_version = "incremental", "change tracking", wm.last_version
+        mode, from_version = "incremental", last
+        reason = f"change tracking (versión {last} recuperada de landing)" if recovered else "change tracking"
 
     select_cols = ", ".join(f"t.{quote(c)}" for c in cols if c != pk)
     if mode == "full":
@@ -200,21 +245,32 @@ def extract(t: dict) -> dict:
             f"WHERE ct.SYS_CHANGE_VERSION <= {to_version}"
         )
 
-    path = f"/Volumes/{catalog}/landing/{LANDING_VOLUME}/{target}/{batch_id}"
+    # --- Escritura en dos pasos: _staging y luego publicación en landing.
+    # Auto Loader solo lee landing/<tabla>/, así que nunca ve un lote a medio escribir.
+    # Lo que haya quedado en _staging de un intento fallido se descarta.
+    staging_dir = f"{STAGING_ROOT}/{target}"
+    dbutils.fs.rm(staging_dir, True)
+    name = lot_name(int(to_version), mode)
+    staging = f"{staging_dir}/{name}"
     df = (
         read_sql(query)
         .withColumn("_batch_id", F.lit(batch_id))
         .withColumn("_extracted_at", F.current_timestamp())
         .withColumn("_source", F.lit(f"azuresql:{SOURCE_DB}.dbo.{src}"))
     )
-    # overwrite: si el job reintenta la tarea con el mismo batch_id, el lote se reemplaza.
-    df.write.mode("overwrite").parquet(path)
-    rows = spark.read.parquet(path).count()
-    if rows == 0:
-        dbutils.fs.rm(path, True)  # sin cambios: no se deja un lote vacío en landing
-        path = None
+    df.write.mode("overwrite").parquet(staging)
+    rows = spark.read.parquet(staging).count()
+    path = None
+    if rows > 0:
+        path = f"{LANDING_ROOT}/{target}/{name}"
+        dbutils.fs.mkdirs(f"{LANDING_ROOT}/{target}")
+        dbutils.fs.mv(staging, path, recurse=True)  # publicación del lote completo
+    dbutils.fs.rm(staging_dir, True)  # sin cambios: no se publica un lote vacío
 
-    # --- Commit: la versión avanza solo después de escribir el lote
+    if simulate_failure == src:
+        raise RuntimeError(f"Falla simulada en {src} después de publicar el lote y antes de guardar la marca de agua")
+
+    # --- Commit: la versión avanza solo después de publicar el lote
     spark.sql(
         f"""
         MERGE INTO {catalog}.ops.ct_watermarks AS w
@@ -238,7 +294,7 @@ def extract(t: dict) -> dict:
 # COMMAND ----------
 
 LOG_SCHEMA = spark.table(f"{catalog}.ops.ingestion_log").schema
-results, failures = [], []
+failures = []
 for t in tables:
     try:
         r = extract(t)
@@ -254,11 +310,11 @@ for t in tables:
         }
         failures.append(t["source"])
         print(f"{t['source']:<15} FALLÓ: {str(exc)[:300]}")
-    results.append({"batch_id": batch_id, **r})
-
-spark.createDataFrame(results, LOG_SCHEMA).write.mode("append").saveAsTable(f"{catalog}.ops.ingestion_log")
+    # Registro por tabla (no al final): si el proceso se interrumpe, lo ya hecho queda anotado.
+    spark.createDataFrame([{"batch_id": batch_id, **r}], LOG_SCHEMA).write.mode("append").saveAsTable(
+        f"{catalog}.ops.ingestion_log")
 
 if failures:
-    # La tarea falla para que el job lo muestre y reintente; las tablas que sí
-    # terminaron ya guardaron su versión y no se vuelven a extraer.
+    # La tarea falla para que el job lo muestre y reintente. Las tablas que sí
+    # terminaron ya guardaron su versión y el reintento sigue desde ahí.
     raise RuntimeError(f"Falló la extracción de: {failures}")
