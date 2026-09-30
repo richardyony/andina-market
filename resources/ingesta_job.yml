@@ -1,0 +1,53 @@
+# Job de ingesta del nivel 1: Azure SQL → landing (Parquet) → bronze (Delta).
+# Las tareas corren en cómputo serverless (no se declara cluster): no consume la
+# cuota de vCPU de la suscripción y no hay clusters que administrar (D-01).
+resources:
+  jobs:
+    andina_ingesta:
+      name: andina_ingesta_${bundle.target}
+      description: >-
+        Extracción incremental de andina_oltp con Change Tracking hacia landing
+        y carga append-only a bronze con Auto Loader.
+
+      # Una sola corrida a la vez: dos extracciones simultáneas leerían desde la
+      # misma versión y competirían al guardar la marca de agua.
+      max_concurrent_runs: 1
+
+      # Cada hora. Change Tracking retiene 7 días, así que hay margen de sobra ante
+      # fallas; una frecuencia mayor reduce los estados intermedios de Payments que
+      # no se llegan a ver (D-03).
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause}
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: tables
+          default: ""
+
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+
+      tasks:
+        - task_key: extract_sqlserver_ct
+          description: Azure SQL → /Volumes/<catalog>/landing/sqlserver (Parquet por lote)
+          notebook_task:
+            notebook_path: ../src/ingesta/01_extract_sqlserver_ct.py
+            base_parameters:
+              batch_id: "{{job.run_id}}"
+          max_retries: 1
+          min_retry_interval_millis: 60000
+          timeout_seconds: 3600
+
+        - task_key: bronze_autoloader
+          description: landing → <catalog>.bronze con Auto Loader (append-only)
+          depends_on:
+            - task_key: extract_sqlserver_ct
+          notebook_task:
+            notebook_path: ../src/ingesta/02_bronze_autoloader.py
+          max_retries: 1
+          min_retry_interval_millis: 60000
+          timeout_seconds: 3600

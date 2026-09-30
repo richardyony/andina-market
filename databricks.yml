@@ -1,0 +1,38 @@
+# Declarative Automation Bundle (antes Databricks Asset Bundle) de Andina Market.
+# Un mismo código, dos entornos: cada target fija su catálogo de Unity Catalog (D-07).
+#
+#   databricks bundle validate            # revisa la configuración
+#   databricks bundle deploy -t dev       # despliega en dev (por defecto)
+#   databricks bundle run andina_ingesta  # ejecuta el job en dev
+bundle:
+  name: andina_market
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Catálogo de Unity Catalog del entorno (andina_dev / andina_prod)
+  schedule_pause:
+    description: Estado del schedule horario del job (PAUSED / UNPAUSED)
+    default: PAUSED
+
+workspace:
+  host: https://adb-7405611375860820.0.azuredatabricks.net
+
+targets:
+  dev:
+    # development: los recursos llevan el prefijo "[dev <usuario>]" y el schedule queda en pausa.
+    mode: development
+    default: true
+    variables:
+      catalog: andina_dev
+
+  prod:
+    mode: production
+    variables:
+      catalog: andina_prod
+      # Se activa conscientemente al promover a producción (cada corrida consume DBU).
+      schedule_pause: PAUSED
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
