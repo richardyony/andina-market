@@ -50,7 +50,7 @@ Cada decisión incluye la alternativa descartada y el motivo. Este registro crec
 - **Un catálogo por entorno:** `andina_dev` y `andina_prod`, cada uno con su propia raíz de almacenamiento. El código recibe el catálogo como parámetro y el bundle lo fija por target, así el mismo código se promueve sin cambios. Staging se omite por el tamaño del reto: se agregaría como un tercer catálogo y un tercer target.
 - **Esquemas por capa:** `landing`, `bronze`, `silver`, `gold`, `ml`, `genai`, más `ops` para el control de la ingesta (última versión de Change Tracking leída por tabla y registro de lotes). Separar `ops` evita mezclar metadatos operativos con datos de negocio y permite darle permisos distintos.
 - **Descartado: el catálogo por defecto del workspace (`ws_richard`).** Su almacenamiento vive en el grupo de recursos administrado por Databricks, así que se borra con el workspace y no se puede gobernar de forma independiente.
-- **Credenciales de la fuente:** en el secret scope `andina-sql` (`server`, `database`, `user`, `password`), nunca en el código.
+- **Credenciales de la fuente:** en Azure Key Vault, leídas por el secret scope `andina-kv` (`server`, `database`, `user`, `password`), nunca en el código (D-17).
 
 ## D-08. Ingesta en dos pasos: landing en Parquet y bronze con Auto Loader
 
@@ -76,6 +76,7 @@ Cada decisión incluye la alternativa descartada y el motivo. Este registro crec
 - **Lo que sí puede repetirse, y es correcto:** si una fila cambia mientras se lee el snapshot inicial, llega en el snapshot con la versión de corte y otra vez en el incremental con su versión real. No es un duplicado: son dos registros de cambio distintos. Silver toma la última versión por PK, que es lo que corresponde para el estado actual (SCD1) de todas formas.
 - **Descartado: snapshot isolation en una transacción con la lectura de la versión.** Es la forma exacta que documenta Microsoft, pero Spark JDBC abre una conexión por consulta y no comparte transacción entre la versión y el SELECT. El caso anterior es la única consecuencia y silver lo absorbe.
 - **Recarga automática:** si la versión de partida es menor que `CHANGE_TRACKING_MIN_VALID_VERSION` (el extractor no corrió dentro de la retención de 7 días), esa tabla se recarga completa y el motivo queda en `ingestion_log.mode_reason`.
+- **Borrados en una recarga completa:** las filas borradas en la fuente mientras no se extraía no llegan por Change Tracking, y sin más quedarían para siempre en silver. Por eso, en una recarga completa, toda clave vigente en bronze que no aparece en el snapshot nuevo se agrega al mismo lote como un DELETE sintético con la versión de corte (`mode_reason` dice cuántos). Supuesto: bronze está al día con lo publicado en landing; el job carga bronze justo después de cada extracción, así que solo fallaría si además quedó un lote sin cargar antes de la recarga.
 - **Concurrencia:** `max_concurrent_runs: 1` evita que dos corridas compitan por la misma marca de agua.
 - **Fallas parciales:** si una tabla falla, se registra en `ingestion_log` con el error, las demás siguen y la tarea termina en error para que el job la reintente y avise por correo. El registro se escribe tabla por tabla, así que no se pierde si el proceso se interrumpe.
 
@@ -120,7 +121,7 @@ Reglas escritas como expectations en las vistas `*_changes`, con una acción seg
 | Acción | Cuándo | Casos |
 |---|---|---|
 | `fail` (detiene el pipeline) | El dato rompe la estructura y no hay forma segura de seguir | PK nula |
-| `drop` (no entra a silver) | El registro no tiene sentido de negocio | Línea con cantidad 0 |
+| `reject` (no entra al estado actual) | El registro no tiene sentido de negocio | Línea con cantidad 0 o negativa: se aplica como borrado en `silver.order_items` y se guarda en `silver.rejected_order_items` |
 | `warn` (entra y se cuenta) | El dato es usable con una bandera o una corrección documentada | Email inválido, país no reconocido, fecha futura, total negativo, canal desconocido |
 
 - **Cuarentena para huérfanos:** las 25 líneas con `ProductId` inexistente siguen en `silver.order_items` y se listan en `silver.quarantine_order_items`. En gold apuntan al producto `-1` "Producto desconocido", así los totales de venta cuadran con la fuente.
@@ -128,7 +129,11 @@ Reglas escritas como expectations en las vistas `*_changes`, con una acción seg
 - **Registro único:** `silver.data_quality_issues` tiene una fila por problema con regla, acción, entidad, id y detalle. Complementa las métricas del event log, que dicen cuántos, con el cuál y el por qué.
 - **La causa importa:** los 178 pedidos cuyo total no cuadra se separan en 140 descuentos aplicados solo a la cabecera y 38 con una línea de cantidad 0 excluida. Los 68 pedidos sin líneas, en 56 sin líneas en la fuente y 12 que solo tenían líneas en 0.
 - **Duplicados de clientes, marcados y no fusionados:** dos reglas (email canónico sin alias `+...`, y nombre + teléfono) detectan las 57 cuentas duplicadas; 47 las detectan ambas, así que ninguna bastaba sola. Solo se usan emails con formato válido: una primera versión agrupaba a 10 clientes con el valor de relleno `sin-correo`. Fusionar cuentas es una decisión de negocio (puede haber homónimos), así que gold expone `is_possible_duplicate` y `principal_customer_id`.
-- **Doble cobro:** dos pagos aprobados del mismo pedido y monto con menos de 60 s de diferencia. Detecta los 70 casos; el segundo pago es el que hay que devolver.
+- **Por qué `reject` y no `drop` para la cantidad 0:** con `expect_or_drop`, si una línea válida se actualizaba a 0, el cambio se descartaba y silver conservaba la cantidad anterior, inflando las ventas. Aplicarla como borrado la saca del estado actual en ambos casos (nace en 0 o pasa a 0), y la tabla de rechazos evita además releer todo bronze para reportarlas.
+- **Doble cobro:** dos pagos que estuvieron aprobados (según el historial SCD2) para el mismo pedido y monto, con menos de 60 s de diferencia. Detecta los 70 casos; el segundo pago es el que hay que devolver. Se lee del historial y no del estado actual para que el caso no desaparezca cuando el negocio lo devuelve (pasa a Reembolsado); `duplicate_current_status` dice si ya se devolvió.
+- **Columnas no mapeadas:** las vistas de silver eligen columnas de forma explícita (un contrato). Una columna nueva de la fuente llega a bronze sola, pero no a silver: `silver.unmapped_source_columns` y la regla `columna_no_mapeada` la hacen visible hasta que se decida llevarla.
+- **Sin datos personales en la tabla de problemas:** `detail` describe el error ("sin @", "@ repetida") en lugar de copiar el email. Es una tabla para compartir con quien corrige los datos.
+- **Validación de punta a punta:** la última tarea del job comprueba bronze = silver, gold = silver, claves únicas e integridad del modelo, y falla si algo no cuadra (resultado en `ops.validation_log`). El catálogo completo de reglas está en [reglas_calidad.md](reglas_calidad.md).
 - **Descartado: corregir en la fuente o en bronze.** Bronze guarda lo recibido (D-10); las correcciones viven en silver y conservan el valor original (`order_date_raw`, `country_raw`, `email`).
 
 ## D-15. Modelo dimensional en gold
@@ -148,3 +153,17 @@ Reglas escritas como expectations en las vistas `*_changes`, con una acción seg
 - **Sin particionamiento por directorios:** con tablas de miles de filas, particionar genera archivos pequeños y empeora el rendimiento; Databricks lo recomienda recién desde ~1 TB por tabla.
 - **Liquid clustering:** silver por su clave (AUTO CDC busca por clave en cada `MERGE`) y los hechos por `date_key` (las consultas analíticas filtran por fecha). Las claves de clustering se pueden cambiar sin reescribir la tabla.
 - **Nombres:** silver y gold en `snake_case`; bronze conserva los nombres de la fuente (D-10).
+
+## D-17. Identidades y secretos: service principals, Key Vault y mínimo privilegio
+
+Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL con el administrador del servidor, los secretos vivían en un scope de Databricks y todo corría con el usuario personal.
+
+- **Un service principal por entorno**, también en dev: `sp-andina-dev` y `sp-andina-prod`. El bundle los fija con `run_as` en cada target, así que el job y el pipeline nunca corren con un usuario. Cada SP tiene `ALL PRIVILEGES` **solo sobre su catálogo** y nada sobre el otro: un error en dev no puede tocar prod. Las tablas son del SP que las crea; dev se reconstruyó completo como `sp-andina-dev` para que así fuera.
+- **Descartado: SP solo en prod.** Dev correría con permisos distintos a los de prod, y los problemas de permisos aparecerían recién al promover.
+- **Usuario de solo lectura en la fuente:** `databricks_reader`, con `db_datareader` y `VIEW CHANGE TRACKING`. Si la credencial se filtra, solo permite leer. El administrador `sqladmin` queda únicamente para el generador de datos, en el `.env` local.
+- **Credenciales en Azure Key Vault** (`kv-andina-8346`), leídas por el secret scope `andina-kv`. Key Vault centraliza los secretos, permite rotarlos sin tocar Databricks y audita cada lectura. Los SP solo tienen `READ` sobre el scope.
+- **Key Vault y mínimo privilegio no se reemplazan:** Key Vault protege dónde se guarda la credencial; el usuario de solo lectura limita el daño si igual se filtra. Hacen falta las dos.
+- **Políticas de acceso en lugar de RBAC en el vault:** asignar el rol RBAC a la aplicación AzureDatabricks requería consultar Microsoft Graph, que no respondía desde la red del candidato. Con políticas de acceso, Databricks se registra solo al crear el scope. En producción se preferiría RBAC.
+- **Siguiente paso, sin contraseñas:** autenticar en Azure SQL con la identidad administrada del Access Connector (una *service credential* de Unity Catalog) y un usuario de Entra ID en la base. Elimina la contraseña por completo; queda fuera del alcance del reto por tiempo.
+- **Datos personales fuera de gold:** `gold.dim_customer` no tiene nombre, email ni teléfono (la analítica no los necesita). Quedan en silver, cuyo acceso se limita a data engineering y data science (ver permisos en [arquitectura.md](arquitectura.md)). Se prefirió quitar las columnas antes que enmascararlas: lo que no está no se puede filtrar.
+- **Firewall de Azure SQL:** se usa una regla temporal por IP para tareas administrativas y se borra al terminar. El rango del ISP y el acceso desde servicios de Azure siguen siendo la mayor exposición; en producción se reemplazan por Private Endpoint (D-02).

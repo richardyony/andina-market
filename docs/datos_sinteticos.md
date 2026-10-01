@@ -47,10 +47,10 @@ El ticket promedio (AOV) es de 123 USD y la mediana, de 68 USD. Mezcla de canale
 | País con formato sucio (`Peru`, ` pe`, `MEX`) | 121 | Captura libre | Mapeo a ISO-2 en silver |
 | Total del pedido ≠ suma de líneas (cupón no itemizado) | 140 | Descuento aplicado solo a la cabecera | Expectation `warn` y columna `diferencia_total` |
 | Pedido sin líneas | 56 | Bug de la app | Se detecta con una regla de integridad y se reporta |
-| Línea con cantidad 0 | 50 | Error de captura | Expectation `drop` |
+| Línea con cantidad 0 | 50 | Error de captura | Expectation `warn` y rechazo del estado actual (se aplica como borrado); queda en `silver.rejected_order_items` |
 | Línea con `ProductId` inexistente (FK `WITH NOCHECK`) | 25 | Migración legacy | Tabla de cuarentena, no se descarta en silencio |
 | Fecha de pedido en 2027 (año mal digitado) | 3 | Error de captura | Expectation `warn`; se usa `CreatedAt` como fecha confiable |
-| Pago aprobado duplicado (doble clic, pocos segundos de diferencia) | 70 | Doble cobro real, que suele generar un ticket urgente | Regla de detección y KPI de doble cobro |
+| Pago aprobado duplicado (doble clic, pocos segundos de diferencia) | 70 | Doble cobro real, que suele generar un ticket urgente | Detección desde el historial de estados (sigue visible tras el reembolso) y KPI de doble cobro |
 | Ticket con cuerpo vacío (`''`, no `NULL`) | ~51 | El cliente solo llenó el asunto | Se normaliza `''` a `NULL` en silver |
 | Tickets spam | 6 | Entran por el formulario web | El simulador los elimina con `DELETE`, y la ingesta debe detectar esa eliminación |
 | Productos descontinuados con ventas históricas | 20 | Ciclo de vida del catálogo | Dimensión con estado; las ventas pasadas se conservan |

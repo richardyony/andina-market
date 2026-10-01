@@ -24,11 +24,13 @@ databricks.yml      Bundle (Declarative Automation Bundle): targets dev y prod
 resources/          Definición del job y del pipeline del bundle
 src/ingesta/        Notebooks de ingesta: extracción con CT → landing, Auto Loader → bronze
 src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2) y gold (modelo estrella)
+src/validacion/     Validación de punta a punta, última tarea del job
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
 - [Arquitectura: diagramas, infraestructura, permisos y costos](docs/arquitectura.md)
 - [Modelo de datos: etapas, silver, modelo estrella y cambios en el tiempo](docs/modelo_datos.md)
+- [Reglas de limpieza, transformación y cuarentena](docs/reglas_calidad.md)
 - [Registro de decisiones](docs/decisiones.md)
 - [Datos sintéticos y casos borde](docs/datos_sinteticos.md)
 - [Diseño: clickstream en tiempo real (Event Hubs + Structured Streaming)](docs/diseno_streaming.md)
@@ -106,7 +108,9 @@ Azure SQL (andina_oltp)                     Unity Catalog: <catalog> = andina_de
 ### 1. Prerrequisitos en Databricks (una vez)
 
 - Catálogos `andina_dev` y `andina_prod` con los esquemas `landing`, `bronze`, `silver`, `gold`, `ml`, `genai` y `ops`, sobre una ubicación externa ADLS Gen2 ([D-07](docs/decisiones.md)).
-- Secret scope `andina-sql` con las claves `server`, `database`, `user` y `password`.
+- En Azure SQL, un usuario de solo lectura `databricks_reader` (`db_datareader` + `VIEW CHANGE TRACKING`, ver el final de `source_db/03_change_tracking.sql`).
+- Un Azure Key Vault con los secretos `server`, `database`, `user` y `password` de ese usuario, y un secret scope `andina-kv` respaldado por él ([D-17](docs/decisiones.md)).
+- Un service principal por entorno (`sp-andina-dev`, `sp-andina-prod`) con el derecho `workspace-access`, `ALL PRIVILEGES` solo sobre su catálogo, `READ` sobre el scope, y el rol `servicePrincipal.user` para quien despliega. El bundle los usa con `run_as`.
 - [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html) autenticada contra el workspace (este proyecto usa `auth_type = azure-cli`).
 
 Los Volumes y las tablas de `ops` los crea el propio job si no existen.
@@ -170,6 +174,12 @@ Resultado de las pruebas del 30/09/2026:
 - **Incremental:** un día simulado pasó por el job completo y abrió nuevas versiones SCD2 de segmentos y pagos.
 - **Idempotencia:** volver a ejecutar el pipeline sin datos nuevos deja todas las tablas idénticas, incluidas las claves sustitutas.
 
+Después de la revisión de seguridad y robustez (D-14, D-17), el entorno dev se reconstruyó desde cero como `sp-andina-dev` y reprodujo los mismos totales. Además se probaron en vivo los escenarios corregidos:
+- **Línea que pasa a cantidad 0:** sale de silver y las ventas bajan exactamente su importe (38,70 USD).
+- **Doble cobro reembolsado:** sigue detectado, con su estado actual "Reembolsado".
+- **Borrado durante una recarga completa:** genera el DELETE sintético y el ticket desaparece de silver.
+- **Job completo sin cambios en la fuente:** todas las tablas quedan idénticas, y las 21 validaciones de `ops.validation_log` pasan en cada corrida.
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -179,4 +189,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Ingesta del nivel 1 (notebooks y bundle):** generados con Claude a partir del diseño del plan del proyecto (Change Tracking, landing en Parquet, bronze append-only). Claude también ejecutó la prueba de punta a punta; los resultados se verifican con las consultas de la sección anterior.
 - **Diagramas y diseños de streaming y SAP:** redactados con Claude. Las cifras del clickstream (duplicados, retrasos, anónimos) salen de analizar la muestra real; las decisiones y alternativas deben poder defenderse en la entrevista, así que conviene revisarlas.
 - **Transformación del nivel 2 (pipeline, reglas de calidad y modelo):** generados con Claude a partir del catálogo de casos borde. La validación contra los números esperados mostró tres reglas que había que afinar (duplicados, pedidos sin líneas y totales que no cuadran); el ajuste y su motivo están en D-14.
+- **Revisión de seguridad y robustez del nivel 2:** pedí a Claude una revisión crítica de lo construido. Encontró 10 debilidades (credenciales con privilegios de administrador, datos personales en gold, ejecución con usuario personal, una regla `drop` que podía inflar ventas, borrados perdidos en una recarga completa, entre otras). Decidí corregirlas, usar service principals también en dev y guardar las credenciales en Key Vault (D-14, D-17).
 - *(Se completa por nivel.)*

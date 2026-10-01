@@ -56,7 +56,7 @@ erDiagram
         timestamp valid_from
         timestamp valid_to
         boolean is_current
-        string full_name "SCD1"
+        boolean has_email "SCD1, sin datos personales"
         string country "ISO-2"
         string city
         boolean is_possible_duplicate
@@ -118,14 +118,18 @@ erDiagram
 | `silver.customer_segment_history` | SCD2 (AUTO CDC) | `customer_id` + vigencia | Una fila por cada segmento que tuvo el cliente |
 | `silver.products` | SCD1 | `product_id` | Catálogo, con `is_active` |
 | `silver.orders` | SCD1 | `order_id` | `order_date` corregida si el año venía mal digitado; `order_date_raw` conserva el original |
-| `silver.order_items` | SCD1 | `order_item_id` | Sin cantidades 0; `line_amount` calculado |
+| `silver.order_items` | SCD1 | `order_item_id` | Sin cantidades ≤ 0 (se aplican como borrado); `line_amount` calculado |
+| `silver.rejected_order_items` | Append-only | — | Cada cambio de línea que llegó con cantidad ≤ 0 |
 | `silver.payments` | SCD1 | `payment_id` | Estado actual del pago |
 | `silver.payment_status_history` | SCD2 | `payment_id` + vigencia | Recorrido de estados: Pendiente → Aprobado / Rechazado → Reembolsado |
 | `silver.support_tickets` | SCD1 | `ticket_id` | Cuerpo vacío normalizado a NULL; spam borrado en la fuente se elimina |
 | `silver.customer_duplicate_groups`, `silver.customer_duplicates` | Vista materializada | — | Cuentas que parecen la misma persona |
 | `silver.quarantine_order_items` | Vista materializada | — | Líneas con producto inexistente |
-| `silver.payment_double_charges` | Vista materializada | — | Pagos aprobados duplicados |
-| `silver.data_quality_issues` | Vista materializada | — | Una fila por problema: regla, acción, entidad, id y detalle |
+| `silver.payment_double_charges` | Vista materializada | — | Pagos aprobados duplicados, aunque ya se hayan devuelto |
+| `silver.unmapped_source_columns` | Vista materializada | — | Columnas de bronze que silver no lleva (cambios de esquema pendientes) |
+| `silver.data_quality_issues` | Vista materializada | — | Una fila por problema: regla, acción, entidad, id y detalle, sin datos personales |
+
+El detalle de cada regla de limpieza, validación y cuarentena está en [reglas_calidad.md](reglas_calidad.md).
 
 **Cómo se manejan los cambios en el tiempo** (lo que pide el reto con los ejemplos del segmento y del pago):
 

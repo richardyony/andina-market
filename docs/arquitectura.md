@@ -115,7 +115,7 @@ flowchart TB
     end
     subgraph DBX["Plano de control de Databricks"]
         MS["Metastore de Unity Catalog"]
-        SEC["Secret scope andina-sql"]
+        SEC["Secret scope andina-kv<br/>(respaldado por Key Vault)"]
         SRV["Cómputo serverless"]
     end
     AC -->|Storage Blob Data Contributor| ST
@@ -132,23 +132,31 @@ flowchart TB
 | Cómputo | Serverless para jobs, notebooks y SQL warehouse | No consume la cuota de vCPU de la suscripción y no hay clusters que administrar (D-01) |
 | Almacenamiento | ADLS Gen2 propio, un catálogo por entorno con su propia raíz | Independiente del ciclo de vida del workspace; dev y prod aislados (D-07) |
 | Acceso al almacenamiento | Access Connector con identidad administrada | Sin secretos que rotar; rol limitado a una cuenta de almacenamiento |
-| Credenciales de la fuente | Secret scope de Databricks | Fuera del código y ocultas en la salida. En producción: scope respaldado por Key Vault |
+| Credenciales de la fuente | Azure Key Vault `kv-andina-8346` vía el secret scope `andina-kv`; usuario `databricks_reader` de solo lectura | Rotación y auditoría centralizadas; si la credencial se filtra, solo permite leer (D-17) |
+| Identidad de ejecución | Service principal por entorno (`sp-andina-dev`, `sp-andina-prod`) con `run_as` en el bundle | Nada corre con un usuario; cada SP solo tiene permisos sobre su catálogo (D-17) |
 | Fuente | Azure SQL serverless en Central US | East US y East US 2 no aceptaban servidores nuevos; el tráfico entre regiones es despreciable a este volumen (D-06) |
 | Despliegue | Declarative Automation Bundle, targets dev y prod | El mismo código se promueve cambiando solo el catálogo (D-11) |
 
-### Permisos (modelo propuesto)
+### Permisos
 
-Hoy todo corre con el usuario del candidato, que es dueño de los catálogos. En producción el modelo sería:
+**Implementado (D-17):** el job y el pipeline corren con un service principal por entorno, cada uno con permisos solo sobre su catálogo. Las tablas son de ese SP.
+
+| Principal | andina_dev | andina_prod | Scope `andina-kv` |
+|---|---|---|---|
+| `sp-andina-dev` (`run_as` del target dev) | `ALL PRIVILEGES` | — | `READ` |
+| `sp-andina-prod` (`run_as` del target prod) | — | `ALL PRIVILEGES` | `READ` |
+| Usuario del candidato (despliega el bundle) | Dueño del catálogo | Dueño del catálogo | `MANAGE` |
+
+**Propuesto para un equipo** (los grupos no se crearon porque el reto tiene un solo usuario):
 
 | Principal | andina_dev | andina_prod |
 |---|---|---|
-| Service principal `sp-andina-jobs` (ejecuta los jobs de prod, `run_as` del bundle) | — | `USE CATALOG`; `MODIFY` y `SELECT` en landing, bronze, silver, gold y ops |
 | Grupo `data-engineers` | `ALL PRIVILEGES` | `SELECT` en todo; sin escritura directa: se despliega solo por bundle |
 | Grupo `analistas` | — | `SELECT` en gold |
 | Grupo `data-science` | `SELECT` en silver; `ALL PRIVILEGES` en ml | `SELECT` en silver y gold; `MODIFY` en ml |
 | Aplicaciones GenAI | — | `SELECT` en genai y funciones de UC específicas |
 
-Principios: nadie escribe en prod a mano; bronze y ops solo los escribe el pipeline; los datos personales de clientes se exponen a analistas solo en gold, agregados o enmascarados.
+Principios: nadie escribe en prod a mano; bronze y ops solo los escribe el pipeline; los datos personales viven en silver, cuyo acceso se limita a ingeniería y ciencia de datos, y gold no los tiene.
 
 ### Costos
 

@@ -27,11 +27,21 @@ def date_key(col):
 # ---------------------------------------------------------------------------
 # Dimensiones
 # ---------------------------------------------------------------------------
-@dp.materialized_view(name="gold.dim_date", comment="Calendario 2024-2027 (el histórico empieza en oct-2024).")
+@dp.materialized_view(
+    name="gold.dim_date",
+    comment="Calendario desde el 1 de enero del año del primer pedido o pago hasta el 31 de diciembre "
+            "del año siguiente al último. Se recalcula con los datos: no vence.",
+)
 def dim_date():
-    d = spark.sql(  # noqa: F821
-        "SELECT explode(sequence(DATE'2024-01-01', DATE'2027-12-31')) AS date"
+    bounds = (
+        read("silver.orders").select(F.col("order_date").alias("d"))
+        .unionByName(read("silver.payments").select(F.col("payment_date").alias("d")))
+        .agg(
+            F.trunc(F.min("d"), "year").alias("start"),
+            F.last_day(F.make_date(F.year(F.max("d")) + 1, F.lit(12), F.lit(1))).alias("end"),
+        )
     )
+    d = bounds.select(F.explode(F.sequence("start", "end")).alias("date"))
     dow = F.dayofweek("date")  # 1 = domingo … 7 = sábado
     iso_dow = F.when(dow == 1, 7).otherwise(dow - 1)  # 1 = lunes … 7 = domingo
     return d.select(
@@ -53,7 +63,8 @@ def dim_date():
     name="gold.dim_customer",
     comment="Cliente con historial SCD2 del segmento: una fila por versión. Los demás atributos "
             "son los vigentes (SCD1). La primera versión se abre en 1900-01-01 para cubrir el "
-            "histórico anterior a la primera ingesta.",
+            "histórico anterior a la primera ingesta. Sin datos personales (nombre, email, teléfono): "
+            "la analítica no los necesita y quedan en silver, con acceso restringido.",
     cluster_by=["customer_id"],
 )
 def dim_customer():
@@ -75,9 +86,9 @@ def dim_customer():
         )
         .join(
             cur.select(
-                "customer_id", "first_name", "last_name",
-                F.concat_ws(" ", "first_name", "last_name").alias("full_name"),
-                "email_norm", "email_valido", "city",
+                "customer_id",
+                F.col("email").isNotNull().alias("has_email"),
+                "email_valido", "city",
                 F.coalesce("country_iso", F.lit("ND")).alias("country"),
                 "signup_date",
             ),
@@ -129,11 +140,22 @@ def orders_with_customer_key():
     ).drop(c.customer_id)
 
 
+# Integridad del modelo: toda fila de hechos debe apuntar a sus dimensiones. Se registran como
+# warn (el dato sigue disponible) y la tarea de validación del job falla si alguna no es 0.
+FACT_KEYS = {
+    "cliente_asignado": "customer_key IS NOT NULL",
+    "fecha_asignada": "date_key IS NOT NULL",
+}
+
+
 @dp.materialized_view(
     name="gold.fact_order_lines",
     comment="Grano: una línea de pedido. Medidas de venta por producto.",
     cluster_by=["date_key"],
 )
+@dp.expect_all(FACT_KEYS)
+@dp.expect("producto_asignado", "product_key IS NOT NULL")
+@dp.expect("importe_no_negativo", "line_amount >= 0")
 def fact_order_lines():
     items = read("silver.order_items")
     orders = orders_with_customer_key().select(
@@ -159,6 +181,7 @@ def fact_order_lines():
     comment="Grano: un pedido. Incluye el total de sus líneas y las banderas de calidad.",
     cluster_by=["date_key"],
 )
+@dp.expect_all(FACT_KEYS)
 def fact_orders():
     items = read("silver.order_items").groupBy("order_id").agg(
         F.count("*").alias("items_count"),
@@ -191,6 +214,7 @@ def fact_orders():
     comment="Grano: un pago (estado actual). El recorrido de estados está en silver.payment_status_history.",
     cluster_by=["date_key"],
 )
+@dp.expect_all(FACT_KEYS)
 def fact_payments():
     p = read("silver.payments")
     orders = orders_with_customer_key().select("order_id", "customer_key", "channel")

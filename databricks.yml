@@ -1,5 +1,6 @@
 # Declarative Automation Bundle (antes Databricks Asset Bundle) de Andina Market.
-# Un mismo código, dos entornos: cada target fija su catálogo de Unity Catalog (D-07).
+# Un mismo código, dos entornos: cada target fija su catálogo de Unity Catalog (D-07) y
+# la identidad con la que corre: un service principal por entorno, nunca un usuario (D-17).
 #
 #   databricks bundle validate            # revisa la configuración
 #   databricks bundle deploy -t dev       # despliega en dev (por defecto)
@@ -27,6 +28,15 @@ targets:
     default: true
     variables:
       catalog: andina_dev
+    # sp-andina-dev: ALL PRIVILEGES solo sobre andina_dev, READ sobre el scope andina-kv.
+    run_as:
+      service_principal_name: a95cc2ab-dbea-4464-b2d0-fc7bcd6d3137
+    # El SP lee los archivos desplegados y ejecuta el pipeline desde el job (CAN_RUN).
+    permissions:
+      - service_principal_name: a95cc2ab-dbea-4464-b2d0-fc7bcd6d3137
+        level: CAN_RUN
+      - user_name: rhuaman@datawizard.tech
+        level: CAN_MANAGE
 
   prod:
     mode: production
@@ -34,5 +44,13 @@ targets:
       catalog: andina_prod
       # Se activa conscientemente al promover a producción (cada corrida consume DBU).
       schedule_pause: PAUSED
+    # sp-andina-prod: ALL PRIVILEGES solo sobre andina_prod, READ sobre el scope andina-kv.
+    run_as:
+      service_principal_name: 53ba4be4-74d5-46a3-b992-763a9c4a2919
+    permissions:
+      - service_principal_name: 53ba4be4-74d5-46a3-b992-763a9c4a2919
+        level: CAN_RUN
+      - user_name: rhuaman@datawizard.tech
+        level: CAN_MANAGE
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

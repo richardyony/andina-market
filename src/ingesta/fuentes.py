@@ -4,8 +4,9 @@ Un solo lugar define qué tablas se ingieren, su clave primaria y el nombre
 que toman en el lakehouse. Lo importan los notebooks de extracción y de bronze.
 """
 
-# Secret scope con server, database, user y password de Azure SQL (D-07).
-SECRET_SCOPE = "andina-sql"
+# Secret scope respaldado por Azure Key Vault (kv-andina-8346) con server, database, user y
+# password de Azure SQL. El usuario es databricks_reader, de solo lectura (D-17).
+SECRET_SCOPE = "andina-kv"
 
 # Volume de landing (esquema `landing`) y Volume de checkpoints (esquema `ops`).
 LANDING_VOLUME = "sqlserver"

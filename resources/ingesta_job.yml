@@ -60,3 +60,13 @@ resources:
           pipeline_task:
             pipeline_id: ${resources.pipelines.andina_transform.id}
           timeout_seconds: 3600
+
+        - task_key: validar_lakehouse
+          description: Comprobaciones de punta a punta (bronze = silver, gold = silver, integridad); falla si alguna no cuadra
+          depends_on:
+            - task_key: silver_gold
+          notebook_task:
+            notebook_path: ../src/validacion/03_validar_lakehouse.py
+            base_parameters:
+              batch_id: "{{job.run_id}}"
+          timeout_seconds: 1800

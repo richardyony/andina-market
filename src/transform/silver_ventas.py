@@ -10,7 +10,7 @@ CATALOG = spark.conf.get("andina.catalog")  # noqa: F821 - `spark` lo inyecta el
 LINEAGE = ["_ct_version", "_ct_operation", "_batch_id", "_ingested_at"]
 
 
-def scd1(target: str, source: str, key: str, comment: str):
+def scd1(target: str, source: str, key: str, comment: str, delete_when: str = "_ct_operation = 'D'"):
     """Tabla de estado actual: la última versión por clave; un DELETE en la fuente la borra."""
     dp.create_streaming_table(name=target, comment=comment, cluster_by=[key])
     dp.create_auto_cdc_flow(
@@ -18,7 +18,7 @@ def scd1(target: str, source: str, key: str, comment: str):
         source=source,
         keys=[key],
         sequence_by=F.col("_ct_version"),
-        apply_as_deletes=F.expr("_ct_operation = 'D'"),
+        apply_as_deletes=F.expr(delete_when),
         except_column_list=["_ct_operation"],
         stored_as_scd_type=1,
     )
@@ -94,9 +94,9 @@ scd1("silver.orders", "orders_changes", "order_id",
 # ---------------------------------------------------------------------------
 @dp.temporary_view(comment="Cambios de líneas de pedido normalizados")
 @dp.expect_or_fail("pk_presente", "order_item_id IS NOT NULL")
-# Cantidad 0 = error de captura: la línea no entra a silver. No es silencioso: el conteo queda
-# en las métricas del pipeline y cada caso se lista en silver.data_quality_issues.
-@dp.expect_or_drop("cantidad_positiva", "_ct_operation = 'D' OR quantity > 0")
+# Cantidad 0 = error de captura: la línea no forma parte del estado actual. Se cuenta aquí, se
+# guarda en silver.rejected_order_items y en silver.order_items se aplica como borrado (abajo).
+@dp.expect("cantidad_positiva", "_ct_operation = 'D' OR quantity > 0")
 @dp.expect("precio_no_negativo", "_ct_operation = 'D' OR unit_price >= 0")
 def order_items_changes():
     return spark.readStream.table(f"{CATALOG}.bronze.order_items").select(  # noqa: F821
@@ -112,6 +112,24 @@ def order_items_changes():
     )
 
 
+# Una línea con cantidad 0 se aplica como borrado: si nace así, nunca entra; si una línea válida se
+# actualiza a 0, sale del estado actual. (Descartar el cambio dejaría la cantidad anterior y
+# inflaría las ventas.)
 scd1("silver.order_items", "order_items_changes", "order_item_id",
-     "Líneas de pedido, estado actual (SCD1). Sin cantidades 0. Los ProductId huérfanos se conservan "
-     "y se listan en silver.quarantine_order_items.")
+     "Líneas de pedido, estado actual (SCD1). Sin cantidades 0 (ver silver.rejected_order_items). "
+     "Los ProductId huérfanos se conservan y se listan en silver.quarantine_order_items.",
+     delete_when="_ct_operation = 'D' OR quantity <= 0")
+
+
+@dp.table(
+    name="silver.rejected_order_items",
+    comment="Registro append-only de cada cambio de línea que llegó con cantidad 0 o negativa. "
+            "Es la evidencia de lo que silver.order_items no incluye.",
+    cluster_by=["order_item_id"],
+)
+def rejected_order_items():
+    return (
+        spark.readStream.table("order_items_changes")  # noqa: F821
+        .where("_ct_operation <> 'D' AND quantity <= 0")
+        .withColumn("reason", F.lit("cantidad_no_positiva"))
+    )

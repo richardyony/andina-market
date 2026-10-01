@@ -38,6 +38,7 @@ import re
 import time
 from datetime import datetime, timezone
 
+from pyspark.sql import Window
 from pyspark.sql import functions as F
 
 from fuentes import LANDING_VOLUME, SECRET_SCOPE, select_tables
@@ -259,6 +260,39 @@ def extract(t: dict) -> dict:
         .withColumn("_source", F.lit(f"azuresql:{SOURCE_DB}.dbo.{src}"))
     )
     df.write.mode("overwrite").parquet(staging)
+
+    # --- Recarga completa: los borrados ocurridos mientras no se extraía no llegan por Change
+    # Tracking. Toda clave vigente en bronze que no está en el snapshot nuevo se borró en la
+    # fuente: se agrega al mismo lote como un DELETE sintético con la versión de corte.
+    synthetic_deletes = 0
+    bronze_table = f"{catalog}.bronze.{target}"
+    if mode == "full" and spark.catalog.tableExists(bronze_table):
+        latest = Window.partitionBy(pk).orderBy(F.col("_ct_version").desc())
+        alive = (
+            spark.table(bronze_table)
+            .withColumn("_rn", F.row_number().over(latest))
+            .where("_rn = 1 AND _ct_operation <> 'D'")
+            .select(pk)
+        )
+        gone = alive.join(spark.read.parquet(staging).select(pk), pk, "left_anti")
+        snapshot_schema = spark.read.parquet(staging).schema
+        deletes = gone.select(
+            *[
+                F.col(pk) if f.name == pk
+                else F.lit(int(to_version)).cast("bigint").alias(f.name) if f.name == "_ct_version"
+                else F.lit("D").alias(f.name) if f.name == "_ct_operation"
+                else F.lit(batch_id).alias(f.name) if f.name == "_batch_id"
+                else F.current_timestamp().alias(f.name) if f.name == "_extracted_at"
+                else F.lit(f"azuresql:{SOURCE_DB}.dbo.{src}").alias(f.name) if f.name == "_source"
+                else F.lit(None).cast(f.dataType).alias(f.name)
+                for f in snapshot_schema.fields
+            ]
+        )
+        deletes.write.mode("append").parquet(staging)
+        synthetic_deletes = spark.read.parquet(staging).where("_ct_operation = 'D'").count()
+        if synthetic_deletes:
+            reason += f"; {synthetic_deletes} borrados detectados contra bronze"
+
     rows = spark.read.parquet(staging).count()
     path = None
     if rows > 0:
