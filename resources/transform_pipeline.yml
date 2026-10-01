@@ -1,0 +1,25 @@
+# Pipeline del nivel 2: bronze → silver → gold con Lakeflow Declarative Pipelines.
+# Serverless y en modo triggered: lo ejecuta el job andina_ingesta después de bronze,
+# procesa lo pendiente y se detiene (sin cómputo encendido entre corridas).
+resources:
+  pipelines:
+    andina_transform:
+      name: andina_transform_${bundle.target}
+      catalog: ${var.catalog}
+      schema: silver            # esquema por defecto; las tablas usan nombres esquema.tabla
+      serverless: true
+      continuous: false
+      channel: CURRENT
+      configuration:
+        andina.catalog: ${var.catalog}
+      libraries:
+        - file:
+            path: ../src/transform/silver_clientes.py
+        - file:
+            path: ../src/transform/silver_ventas.py
+        - file:
+            path: ../src/transform/silver_pagos_tickets.py
+        - file:
+            path: ../src/transform/silver_calidad.py
+        - file:
+            path: ../src/transform/gold_modelo.py

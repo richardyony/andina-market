@@ -1,4 +1,5 @@
-# Job de ingesta del nivel 1: Azure SQL → landing (Parquet) → bronze (Delta).
+# Job del lakehouse: Azure SQL → landing (Parquet) → bronze (Delta) [nivel 1]
+# → silver → gold con el pipeline andina_transform [nivel 2].
 # Las tareas corren en cómputo serverless (no se declara cluster): no consume la
 # cuota de vCPU de la suscripción y no hay clusters que administrar (D-01).
 resources:
@@ -50,4 +51,12 @@ resources:
             notebook_path: ../src/ingesta/02_bronze_autoloader.py
           max_retries: 1
           min_retry_interval_millis: 60000
+          timeout_seconds: 3600
+
+        - task_key: silver_gold
+          description: bronze → silver → gold (Lakeflow Declarative Pipeline, nivel 2)
+          depends_on:
+            - task_key: bronze_autoloader
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.andina_transform.id}
           timeout_seconds: 3600

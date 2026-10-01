@@ -2,14 +2,14 @@
 
 Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde Azure SQL alimenta un lakehouse medallion en Unity Catalog, y de ahí salen la analítica, el feature store, RAG y los agentes.
 
-> **Estado:** en construcción. Niveles 0 y 1 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze desplegada con un bundle, diagrama de arquitectura y diseños de streaming y SAP. Esta sección se actualiza por nivel.
+> **Estado:** en construcción. Niveles 0, 1 y 2 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, y modelo estrella en gold, todo desplegado con un bundle y orquestado en un solo job. Esta sección se actualiza por nivel.
 
 | Nivel | Alcance | Estado |
 |---|---|---|
 | 0. Fuente | Azure SQL, datos sintéticos, Change Tracking | ✅ |
 | 1. Ingesta | JDBC incremental (CT) → landing → Auto Loader → bronze; DABs; diseño streaming y SAP | ✅ |
-| 2. Transformación | Lakeflow Declarative Pipelines, SCD1/SCD2, cuarentena | ⏳ |
-| 3. Gold + BI | Modelo estrella, dashboard AI/BI | ⏳ |
+| 2. Transformación | Lakeflow Declarative Pipelines: silver con expectations, cuarentena, SCD1/SCD2; gold en estrella | ✅ |
+| 3. Analítica + BI | Capa de KPIs sobre gold, dashboard AI/BI | ⏳ |
 | 4. Feature Store | Features point-in-time, MLflow en UC | ⏳ |
 | 5. RAG | Vector Search, evaluación de retrieval | ⏳ |
 | 6. Agente | Diseño o agente mínimo | ⏳ |
@@ -21,12 +21,14 @@ source_db/          DDL de Azure SQL (esquema, FK legacy, Change Tracking)
 data_generator/     Generador de histórico, simulador de cambios, clickstream
 sample_data/        Muestra de eventos de clickstream (.jsonl)
 databricks.yml      Bundle (Declarative Automation Bundle): targets dev y prod
-resources/          Definición de los jobs del bundle
+resources/          Definición del job y del pipeline del bundle
 src/ingesta/        Notebooks de ingesta: extracción con CT → landing, Auto Loader → bronze
+src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2) y gold (modelo estrella)
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
 - [Arquitectura: diagramas, infraestructura, permisos y costos](docs/arquitectura.md)
+- [Modelo de datos: etapas, silver, modelo estrella y cambios en el tiempo](docs/modelo_datos.md)
 - [Registro de decisiones](docs/decisiones.md)
 - [Datos sintéticos y casos borde](docs/datos_sinteticos.md)
 - [Diseño: clickstream en tiempo real (Event Hubs + Structured Streaming)](docs/diseno_streaming.md)
@@ -135,6 +137,39 @@ FROM andina_dev.bronze.orders WHERE OrderId = 26408 ORDER BY _ct_version;
 
 Resultado de la prueba del 29/09/2026: la carga completa dejó en bronze exactamente las 116.925 filas de la fuente, sin duplicados, aun después de una falla y reanudación de la tarea de bronze. El incremental trajo 774 cambios netos (incluidos 6 DELETE de tickets) y la columna nueva `Orders.CouponCode`, detectada en `ingestion_log` y agregada a bronze sin intervención.
 
+## Cómo reproducir: transformación (nivel 2)
+
+El pipeline `andina_transform` (Lakeflow Declarative Pipelines, serverless) se despliega con el mismo bundle y corre como tercera tarea del job `andina_ingesta`. Etapas, diagrama del modelo y manejo de cambios en el tiempo: [docs/modelo_datos.md](docs/modelo_datos.md).
+
+```powershell
+databricks bundle deploy -t dev
+databricks bundle run andina_ingesta -t dev      # extracción → bronze → silver → gold
+databricks bundle run andina_transform -t dev    # solo silver y gold
+```
+
+### Verificar
+
+```sql
+-- Problemas de calidad por regla y acción (nada se descarta en silencio)
+SELECT rule, action, count(*) FROM andina_dev.silver.data_quality_issues GROUP BY ALL ORDER BY 1;
+
+-- Historial SCD2 del segmento de un cliente
+SELECT customer_id, segment, __START_AT.updated_at AS desde, __END_AT.updated_at AS hasta
+FROM andina_dev.silver.customer_segment_history WHERE customer_id = 5115 ORDER BY __START_AT._ct_version;
+
+-- Las ventas de gold cuadran con silver (incluye las líneas con producto desconocido)
+SELECT (SELECT sum(line_amount) FROM andina_dev.gold.fact_order_lines) AS gold,
+       (SELECT sum(line_amount) FROM andina_dev.silver.order_items)    AS silver;
+```
+
+Las métricas de cada expectation se ven en la interfaz del pipeline (pestaña **Data quality** de cada tabla).
+
+Resultado de las pruebas del 30/09/2026:
+- **Casos borde:** los del catálogo se detectan todos, con su causa: 57 cuentas duplicadas, 70 dobles cobros, 25 líneas en cuarentena, 50 líneas con cantidad 0, 3 fechas futuras corregidas y 140 descuentos en cabecera, además de los que explica una línea en 0.
+- **Consistencia:** las ventas de gold cuadran al centavo con silver.
+- **Incremental:** un día simulado pasó por el job completo y abrió nuevas versiones SCD2 de segmentos y pagos.
+- **Idempotencia:** volver a ejecutar el pipeline sin datos nuevos deja todas las tablas idénticas, incluidas las claves sustitutas.
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -143,4 +178,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Infraestructura de Azure y Unity Catalog:** Claude ejecutó los comandos de Azure CLI y Databricks CLI bajo mi aprobación paso a paso. Las incidencias (regiones bloqueadas, IP dinámica) y sus decisiones están en D-06 y D-07.
 - **Ingesta del nivel 1 (notebooks y bundle):** generados con Claude a partir del diseño del plan del proyecto (Change Tracking, landing en Parquet, bronze append-only). Claude también ejecutó la prueba de punta a punta; los resultados se verifican con las consultas de la sección anterior.
 - **Diagramas y diseños de streaming y SAP:** redactados con Claude. Las cifras del clickstream (duplicados, retrasos, anónimos) salen de analizar la muestra real; las decisiones y alternativas deben poder defenderse en la entrevista, así que conviene revisarlas.
+- **Transformación del nivel 2 (pipeline, reglas de calidad y modelo):** generados con Claude a partir del catálogo de casos borde. La validación contra los números esperados mostró tres reglas que había que afinar (duplicados, pedidos sin líneas y totales que no cuadran); el ajuste y su motivo están en D-14.
 - *(Se completa por nivel.)*

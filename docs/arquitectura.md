@@ -42,7 +42,7 @@ flowchart LR
     APP -.-> EH -.->|Structured Streaming| BRZ
     SAP -.-> ADF -.-> LAND
     LAND -->|Auto Loader| BRZ
-    BRZ -.->|Lakeflow Declarative Pipelines| SLV -.-> GLD
+    BRZ -->|Lakeflow Declarative Pipelines| SLV --> GLD
     GLD -.-> BI
     SLV -.-> FS
     SLV -.-> RAG

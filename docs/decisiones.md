@@ -90,7 +90,61 @@ Cada decisión incluye la alternativa descartada y el motivo. Este registro crec
 
 ## D-11. Orquestación y frecuencia
 
-- **Lakeflow Job de dos tareas** (extracción → bronze) en cómputo serverless, definido en un Declarative Automation Bundle con targets `dev` y `prod`. Cada target fija su catálogo, así que el mismo código se promueve sin cambios.
+- **Lakeflow Job** en cómputo serverless: extracción → bronze → pipeline de silver y gold (esta última tarea desde el nivel 2, D-12). Definido en un Declarative Automation Bundle con targets `dev` y `prod`. Cada target fija su catálogo, así que el mismo código se promueve sin cambios.
 - **Frecuencia: cada hora.** Change Tracking entrega el estado neto por PK, así que una frecuencia mayor reduce los estados intermedios de `Payments` que no se llegan a ver (D-03). La retención de 7 días da margen amplio ante fallas.
 - **Schedule en pausa por defecto** en ambos targets: cada corrida consume DBU, así que se activa a propósito al pasar a producción.
 - **Streaming con costo de batch:** bronze usa `trigger(availableNow=True)`. Pasar a tiempo casi real solo requiere cambiar el trigger a `processingTime` y ejecutar el stream de forma continua; la lógica, los checkpoints y las tablas no cambian.
+
+## D-12. Transformación con Lakeflow Declarative Pipelines
+
+- **Decisión:** un solo pipeline declarativo (`andina_transform`), serverless y en modo *triggered*, con silver y gold. El job lo ejecuta como tercera tarea, después de bronze. El diagrama y la responsabilidad de cada etapa están en [modelo_datos.md](modelo_datos.md).
+- **Por qué declarativo:** se escribe qué tabla depende de cuál y qué reglas de calidad cumple; el motor resuelve el orden, el estado de streaming, los reintentos y el cálculo incremental, y registra las métricas de calidad en el event log. Es "calidad como código", no notebooks sueltos.
+- **Descartado: notebooks con `MERGE` escritos a mano.** Habría que programar el orden entre tablas, el SCD2, la deduplicación por secuencia y el manejo de DELETE; es más código y más lugares donde equivocarse.
+- **Descartado: dbt.** Muy bueno para SQL por lotes, pero sin streaming ni AUTO CDC nativos, y agrega otra herramienta que desplegar. Encaja mejor en un equipo que ya lo usa.
+- **Un pipeline para silver y gold, no dos:** el motor ve el grafo completo y refresca gold solo cuando silver cambió. Se separarían si tuvieran dueños o frecuencias distintas.
+- **Triggered, no continuo:** los datos llegan cada hora; un pipeline continuo tendría cómputo encendido todo el tiempo sin beneficio.
+- **Entornos:** el pipeline recibe el catálogo por configuración (`andina.catalog`) y el bundle lo fija por target. Agregar `staging` es un target más en `databricks.yml` con su catálogo `andina_staging`; no cambia el código.
+
+## D-13. Cambios en el tiempo: AUTO CDC con SCD1 y SCD2
+
+- **Estado actual (SCD1)** para todas las entidades: AUTO CDC aplica cada cambio de bronze sobre su clave, ordenado por `_ct_version`, y borra cuando llega un DELETE. Esto resuelve también lo que D-09 deja a silver: si el mismo cambio llegara dos veces, se aplica una sola vez.
+- **Historial (SCD2) solo donde el negocio lo necesita:** `customer_segment_history` (el reto lo pide para el segmento; sirve para analizar ventas con el segmento de ese momento) y `payment_status_history` (el pago cambia después de creado y su recorrido importa para detectar demoras y reintentos). `track_history_column_list` hace que solo esas columnas abran versiones nuevas.
+- **Descartado: SCD2 de todas las columnas.** Una mudanza o un cambio de teléfono abriría versiones que nadie consulta y harían crecer la dimensión sin valor analítico.
+- **Orden por versión de Change Tracking, no por `UpdatedAt`:** la versión es el orden real de la fuente; `UpdatedAt` depende de que la aplicación la mantenga (D-03). En SCD2, `sequence_by` es `struct(_ct_version, updated_at)`: ordena por versión y deja la fecha de negocio en `__START_AT`/`__END_AT`.
+- **Primera versión conocida:** el historial empieza con la primera ingesta (D-05). En `gold.dim_customer` esa versión se abre en 1900-01-01 para que las ventas anteriores a la ingesta encuentren al cliente; en silver se conserva la fecha real.
+
+## D-14. Calidad de datos: nada se descarta en silencio
+
+Reglas escritas como expectations en las vistas `*_changes`, con una acción según el impacto:
+
+| Acción | Cuándo | Casos |
+|---|---|---|
+| `fail` (detiene el pipeline) | El dato rompe la estructura y no hay forma segura de seguir | PK nula |
+| `drop` (no entra a silver) | El registro no tiene sentido de negocio | Línea con cantidad 0 |
+| `warn` (entra y se cuenta) | El dato es usable con una bandera o una corrección documentada | Email inválido, país no reconocido, fecha futura, total negativo, canal desconocido |
+
+- **Cuarentena para huérfanos:** las 25 líneas con `ProductId` inexistente siguen en `silver.order_items` y se listan en `silver.quarantine_order_items`. En gold apuntan al producto `-1` "Producto desconocido", así los totales de venta cuadran con la fuente.
+- **Descartado: descartar los huérfanos.** Las ventas totales dejarían de cuadrar sin que nadie lo note, y el problema de origen (la migración legacy) no quedaría visible para corregirlo.
+- **Registro único:** `silver.data_quality_issues` tiene una fila por problema con regla, acción, entidad, id y detalle. Complementa las métricas del event log, que dicen cuántos, con el cuál y el por qué.
+- **La causa importa:** los 178 pedidos cuyo total no cuadra se separan en 140 descuentos aplicados solo a la cabecera y 38 con una línea de cantidad 0 excluida. Los 68 pedidos sin líneas, en 56 sin líneas en la fuente y 12 que solo tenían líneas en 0.
+- **Duplicados de clientes, marcados y no fusionados:** dos reglas (email canónico sin alias `+...`, y nombre + teléfono) detectan las 57 cuentas duplicadas; 47 las detectan ambas, así que ninguna bastaba sola. Solo se usan emails con formato válido: una primera versión agrupaba a 10 clientes con el valor de relleno `sin-correo`. Fusionar cuentas es una decisión de negocio (puede haber homónimos), así que gold expone `is_possible_duplicate` y `principal_customer_id`.
+- **Doble cobro:** dos pagos aprobados del mismo pedido y monto con menos de 60 s de diferencia. Detecta los 70 casos; el segundo pago es el que hay que devolver.
+- **Descartado: corregir en la fuente o en bronze.** Bronze guarda lo recibido (D-10); las correcciones viven en silver y conservan el valor original (`order_date_raw`, `country_raw`, `email`).
+
+## D-15. Modelo dimensional en gold
+
+- **Decisión:** modelo estrella con `dim_date`, `dim_customer`, `dim_product` y tres hechos de grano explícito: `fact_order_lines` (línea), `fact_orders` (pedido) y `fact_payments` (pago).
+- **Por qué estrella:** es el modelo que entienden las herramientas de BI y los analistas; las consultas son joins simples de hechos a dimensiones.
+- **Descartado: una sola tabla ancha (One Big Table).** Cómoda para un dashboard puntual, pero repite atributos del cliente en cada línea y obliga a reconstruirla completa cuando cambia una dimensión.
+- **Descartado: gold relacional (3FN).** Es lo que ya es silver; gold agregaría una copia sin simplificar las consultas.
+- **`dim_customer` híbrida:** una fila por versión de segmento (SCD2) con el resto de atributos vigentes (SCD1). Los hechos guardan la clave de la versión vigente a la fecha del pedido (join point-in-time).
+- **Claves sustitutas deterministas:** `customer_key = xxhash64(customer_id, versión)`. Como gold se recalcula, una clave secuencial cambiaría en cada corrida; el hash da siempre la misma clave para la misma versión. Se comprobó recalculando: la huella de las claves no cambió.
+- **Miembro desconocido** en `dim_product` (`-1`) para las líneas en cuarentena.
+- **Gold como vistas materializadas:** se recalculan desde silver (de forma incremental cuando el motor puede), así que son idempotentes por construcción.
+
+## D-16. Formato, particionamiento y organización
+
+- **Delta** en todas las capas.
+- **Sin particionamiento por directorios:** con tablas de miles de filas, particionar genera archivos pequeños y empeora el rendimiento; Databricks lo recomienda recién desde ~1 TB por tabla.
+- **Liquid clustering:** silver por su clave (AUTO CDC busca por clave en cada `MERGE`) y los hechos por `date_key` (las consultas analíticas filtran por fecha). Las claves de clustering se pueden cambiar sin reescribir la tabla.
+- **Nombres:** silver y gold en `snake_case`; bronze conserva los nombres de la fuente (D-10).
