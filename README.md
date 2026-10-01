@@ -2,7 +2,7 @@
 
 Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde Azure SQL alimenta un lakehouse medallion en Unity Catalog, y de ahí salen la analítica, el feature store, RAG y los agentes.
 
-> **Estado:** en construcción. Niveles 0 a 3 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, todo desplegado con un bundle y orquestado en un solo job. Esta sección se actualiza por nivel.
+> **Estado:** en construcción. Niveles 0 a 4 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, feature store point-in-time y dos modelos registrados con MLflow, todo desplegado con un bundle y orquestado en jobs. Esta sección se actualiza por nivel.
 
 | Nivel | Alcance | Estado |
 |---|---|---|
@@ -10,7 +10,7 @@ Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde 
 | 1. Ingesta | JDBC incremental (CT) → landing → Auto Loader → bronze; DABs; diseño streaming y SAP | ✅ |
 | 2. Transformación | Lakeflow Declarative Pipelines: silver con expectations, cuarentena, SCD1/SCD2; gold en estrella | ✅ |
 | 3. Analítica + BI | Capa de KPIs agregada en gold (4 KPIs) y dashboard de AI/BI | ✅ |
-| 4. Feature Store | Features point-in-time, MLflow en UC | ⏳ |
+| 4. Feature Store | Features point-in-time en UC, modelos de recompra y tickets urgentes con MLflow, puntuación batch | ✅ |
 | 5. RAG | Vector Search, evaluación de retrieval | ⏳ |
 | 6. Agente | Diseño o agente mínimo | ⏳ |
 
@@ -26,6 +26,7 @@ src/ingesta/        Notebooks de ingesta: extracción con CT → landing, Auto L
 src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2), gold (modelo estrella) y capa de KPIs
 src/validacion/     Validación de punta a punta, última tarea del job
 src/dashboards/     Dashboard de AI/BI (.lvdash.json), desplegado por el bundle
+src/ml/             Feature store, entrenamiento con MLflow y puntuación batch (nivel 4)
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
@@ -33,6 +34,7 @@ docs/               Decisiones de arquitectura y documentación de datos
 - [Modelo de datos: etapas, silver, modelo estrella y cambios en el tiempo](docs/modelo_datos.md)
 - [Reglas de limpieza, transformación y cuarentena](docs/reglas_calidad.md)
 - [KPIs y dashboard: definiciones, capa analítica y valores](docs/kpis.md)
+- [Feature store y modelos: guía para un ML engineer](docs/feature_store.md)
 - [Registro de decisiones](docs/decisiones.md)
 - [Datos sintéticos y casos borde](docs/datos_sinteticos.md)
 - [Diseño: clickstream en tiempo real (Event Hubs + Structured Streaming)](docs/diseno_streaming.md)
@@ -200,6 +202,26 @@ databricks bundle summary -t dev         # muestra la URL del dashboard
 
 La validación del job comprueba en cada corrida que los agregados cuadren con los hechos.
 
+## Cómo reproducir: feature store y modelos (nivel 4)
+
+Job `andina_ml` (serverless): tablas de features → entrenamiento de los dos modelos → puntuación batch. Guía completa para un ML engineer: [docs/feature_store.md](docs/feature_store.md).
+
+```powershell
+databricks workspace mkdirs /Shared/andina_market     # carpeta de los experimentos de MLflow (una vez)
+databricks bundle deploy -t dev
+databricks bundle run andina_ml -t dev
+```
+
+| Pieza | Dónde |
+|---|---|
+| Features del cliente (foto semanal, clave de tiempo) | `ml.customer_features` |
+| Features del ticket | `ml.ticket_features` |
+| Modelos (Unity Catalog, alias `champion`) | `ml.repurchase_propensity`, `ml.urgent_ticket_classifier` |
+| Puntajes | `ml.repurchase_scores`, `ml.urgent_ticket_scores` |
+| Experimentos | `/Shared/andina_market/<catalog>_*` |
+
+Resultados de la evaluación temporal: recompra a 90 días con ROC AUC 0,822 (frente a 0,780 de ordenar por recencia); tickets urgentes con ROC AUC 0,854 y PR AUC 0,66 sobre un 18,7 % de urgentes. Se verificó con SQL independiente que las features de cada foto solo cuentan hechos anteriores a su fecha.
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -211,4 +233,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Transformación del nivel 2 (pipeline, reglas de calidad y modelo):** generados con Claude a partir del catálogo de casos borde. La validación contra los números esperados mostró tres reglas que había que afinar (duplicados, pedidos sin líneas y totales que no cuadran); el ajuste y su motivo están en D-14.
 - **Revisión de seguridad y robustez del nivel 2:** pedí a Claude una revisión crítica de lo construido. Encontró 10 debilidades (credenciales con privilegios de administrador, datos personales en gold, ejecución con usuario personal, una regla `drop` que podía inflar ventas, borrados perdidos en una recarga completa, entre otras). Decidí corregirlas, usar service principals también en dev y guardar las credenciales en Key Vault (D-14, D-17).
 - **KPIs y dashboard del nivel 3:** las definiciones, la capa agregada y el JSON del dashboard se generaron con Claude. Cada consulta del dashboard se ejecutó contra los datos para verificarla, y los valores se contrastaron con los parámetros del generador (ticket promedio, mezcla de canales, tasa de rechazo con tarjeta).
+- **Feature store y modelos del nivel 4:** el diseño (fotos semanales point-in-time, exclusión del segmento por fuga del futuro, validación temporal, línea base) y el código se generaron con Claude. Las métricas son las de la corrida real; el point-in-time se verificó con una consulta independiente.
 - *(Se completa por nivel.)*

@@ -1,0 +1,39 @@
+# Job de machine learning del nivel 4: features → entrenamiento de los dos modelos → puntuación.
+# Separado del job de ingesta porque tiene otra frecuencia: las features y los puntajes se
+# refrescan a diario; reentrenar se decide aparte (o semanal). Serverless, como el resto.
+resources:
+  jobs:
+    andina_ml:
+      name: andina_ml_${bundle.target}
+      description: Tablas de features en Unity Catalog, modelos con MLflow y puntuación batch.
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 30 6 * * ?"   # diario 06:30 UTC, después de la ingesta nocturna
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause}
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+      tasks:
+        - task_key: feature_tables
+          notebook_task:
+            notebook_path: ../src/ml/01_feature_tables.py
+          timeout_seconds: 3600
+        - task_key: train_repurchase
+          depends_on: [{task_key: feature_tables}]
+          notebook_task:
+            notebook_path: ../src/ml/02_train_repurchase.py
+          timeout_seconds: 3600
+        - task_key: train_urgent_tickets
+          depends_on: [{task_key: feature_tables}]
+          notebook_task:
+            notebook_path: ../src/ml/03_train_urgent_tickets.py
+          timeout_seconds: 3600
+        - task_key: score_batch
+          depends_on: [{task_key: train_repurchase}, {task_key: train_urgent_tickets}]
+          notebook_task:
+            notebook_path: ../src/ml/04_score_batch.py
+          timeout_seconds: 3600

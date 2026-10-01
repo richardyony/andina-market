@@ -178,3 +178,28 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **AI/BI Dashboard sobre un SQL warehouse serverless:** nativo de Databricks, respeta los permisos de Unity Catalog del lector (`embed_credentials: false`), se versiona como JSON y se despliega con el bundle a cada entorno con su catálogo. El warehouse se enciende al abrir el dashboard y se apaga solo.
 - **Descartado: Power BI.** Es la herramienta habitual en muchas empresas y se conecta bien a Databricks, pero requiere licencias, un archivo `.pbix` fuera del repositorio y una puerta de enlace o conexión adicional. Para el reto no aporta frente a la opción nativa; en una empresa que ya usa Power BI, leería las mismas tablas `agg_*`.
 - **Los cuatro KPIs** cubren el negocio de punta a punta: cuánto se vende (ventas netas y ticket), si los clientes vuelven (recompra, la base del modelo del nivel 4), si se cobra bien (aprobación y dobles cobros, que conectan con los tickets urgentes) y cuánto se devuelve (calidad del catálogo).
+
+## D-19. Feature store en Unity Catalog con fotos semanales point-in-time
+
+- **Decisión:** tablas de features en Unity Catalog con el cliente de Feature Engineering: `ml.customer_features` (clave `customer_id` + `as_of_ts` como clave de tiempo) y `ml.ticket_features` (clave `ticket_id`). Guía de uso en [feature_store.md](feature_store.md).
+- **Por qué Unity Catalog:** las features quedan gobernadas como cualquier tabla (permisos, linaje hacia silver), y un modelo registrado con `fe.log_model` sabe qué features usa: al puntuar no hay que recalcular nada ni arriesgar diferencias con el entrenamiento.
+- **Fotos semanales con clave de tiempo**, cada una calculada solo con hechos anteriores a su fecha, y `timestamp_lookup_key` al entrenar. Garantiza que ninguna observación vea el futuro.
+- **Descartado: una tabla con el estado actual de cada cliente.** Es lo más simple, pero al entrenar con observaciones pasadas usaría features calculadas con datos posteriores: fuga del futuro, y el modelo parecería mejor de lo que es.
+- **Descartado: fotos diarias.** Más frescas, pero 7 veces más filas para un negocio donde la recompra se mide en meses. La semana es suficiente; la recencia exacta se puede calcular al puntuar si hiciera falta.
+- **Segmento del CRM excluido como feature:** su historial empieza con la primera ingesta (D-05); antes, solo existe el segmento de hoy, calculado con compras posteriores. Usarlo sería fuga del futuro.
+- **Pagos rechazados desde el historial de estados** (SCD2) y no desde el estado actual: un pago pendiente a la fecha de la foto pudo rechazarse días después.
+
+## D-20. Modelos, validación y registro con MLflow
+
+- **Propensión de recompra:** probabilidad de que un cliente con compras vuelva a comprar en los próximos 90 días (el mismo horizonte que el KPI de recompra). `HistGradientBoostingClassifier`: maneja nulos (clientes sin compras en la ventana) y relaciones no lineales sin preprocesar; con miles de filas no hace falta nada distribuido.
+- **Tickets urgentes:** TF-IDF del asunto y del cuerpo, más el historial del cliente antes del ticket, con regresión logística balanceada (las urgentes son minoría). El texto es la señal principal, porque el agente sube la prioridad cuando el cliente expresa urgencia. Hay un ~8 % de ruido de etiquetado en la fuente: el techo del modelo está por debajo de la perfección.
+- **Validación temporal, no aleatoria:** se entrena con el pasado y se evalúa con meses posteriores. Un split aleatorio pone observaciones del futuro en el entrenamiento e infla las métricas.
+- **Línea base:** el modelo de recompra se compara con una regla sin modelo (ordenar por recencia). Si no la supera claramente, el modelo no aporta.
+- **La probabilidad, no la clase:** los modelos se registran como `pyfunc` que devuelve la probabilidad. Para ordenar clientes o una cola de tickets se necesita el puntaje; el umbral lo decide el negocio según su capacidad (cupones, agentes).
+- **Registro en Unity Catalog** (`ml.repurchase_propensity`, `ml.urgent_ticket_classifier`) con el alias `champion`. La puntuación siempre usa `@champion`; promover una versión nueva es mover el alias, sin cambiar código. Cada versión queda ligada a su corrida de MLflow (parámetros, métricas) y a las tablas de features con las que se entrenó.
+
+## D-21. Puntuación y servicio
+
+- **Batch diario** con `fe.score_batch` en el job `andina_ml` (features → entrenamiento → puntuación): `ml.repurchase_scores` y `ml.urgent_ticket_scores`. Es suficiente para campañas de retención y para ordenar la cola de soporte cada mañana.
+- **Reentrenamiento en el mismo job, por simplicidad.** En producción se separaría: las features y la puntuación a diario, el reentrenamiento semanal o cuando se degrade el modelo, y la promoción a `champion` solo si la versión nueva supera a la actual en la evaluación temporal.
+- **Baja latencia, diseñada y no desplegada:** tabla online sincronizada desde `ml.customer_features` + Model Serving del modelo `@champion` (que busca las features solo, porque se registró con `fe.log_model`). No se desplegó porque cuesta mientras está encendido y el caso de uso actual es batch.
