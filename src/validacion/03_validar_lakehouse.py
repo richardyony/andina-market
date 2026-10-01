@@ -13,6 +13,7 @@
 # MAGIC | Gold cuadra con silver | Mismas ventas, líneas, pedidos y pagos |
 # MAGIC | El modelo estrella es íntegro | Ninguna fila de hechos sin cliente, fecha o producto |
 # MAGIC | El calendario cubre los hechos | Toda `date_key` existe en `dim_date` |
+# MAGIC | Los KPIs cuadran con los hechos | Ventas netas, unidades y pagos de los agregados = hechos |
 
 # COMMAND ----------
 
@@ -78,6 +79,16 @@ checks += [
     ("integridad.clientes_con_una_version_vigente", 0, value(f"""
         SELECT count(*) FROM (SELECT customer_id FROM {g}.dim_customer
                               GROUP BY customer_id HAVING sum(CAST(is_current AS INT)) <> 1)""")),
+    # La capa analítica (nivel 3) cuadra con los hechos de los que sale.
+    ("kpi_vs_hechos.ventas_netas",
+     value(f"SELECT sum(total_amount) FROM {g}.fact_orders WHERE order_status IN ('Pagado','Enviado','Entregado')"),
+     value(f"SELECT sum(net_sales) FROM {g}.agg_sales_monthly")),
+    ("kpi_vs_hechos.unidades_vendidas",
+     value(f"SELECT sum(quantity) FROM {g}.fact_order_lines WHERE order_status IN ('Pagado','Enviado','Entregado','Devuelto')"),
+     value(f"SELECT sum(sold_units) FROM {g}.agg_returns_monthly")),
+    ("kpi_vs_hechos.intentos_de_pago",
+     value(f"SELECT count(*) FROM {g}.fact_payments"),
+     value(f"SELECT sum(attempts) FROM {g}.agg_payments_monthly")),
 ]
 
 # COMMAND ----------

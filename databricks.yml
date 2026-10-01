@@ -17,6 +17,10 @@ variables:
   schedule_pause:
     description: Estado del schedule horario del job (PAUSED / UNPAUSED)
     default: PAUSED
+  warehouse_id:
+    description: SQL warehouse serverless que ejecuta las consultas del dashboard
+    lookup:
+      warehouse: Serverless Starter Warehouse
 
 workspace:
   host: https://adb-7405611375860820.0.azuredatabricks.net

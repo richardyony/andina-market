@@ -1,0 +1,626 @@
+{
+  "datasets": [
+    {
+      "name": "ds_resumen",
+      "displayName": "Resumen últimos 12 meses",
+      "queryLines": [
+        "WITH v AS (SELECT date_format(add_months(to_date(concat(max(year_month), '-01')), -11), 'yyyy-MM') AS desde FROM agg_sales_monthly), ",
+        "ventas AS (SELECT sum(net_sales) AS net_sales_12m, sum(net_sales) / sum(orders) AS aov_12m FROM agg_sales_monthly, v WHERE year_month >= v.desde), ",
+        "cobros AS (SELECT sum(approved) / (sum(approved) + sum(rejected)) AS approval_rate_12m, ",
+        "  (SELECT sum(double_charges_pending) FROM agg_payments_monthly) AS double_charges_pending, ",
+        "  (SELECT sum(double_charge_amount_pending) FROM agg_payments_monthly) AS double_charge_amount_pending ",
+        "  FROM agg_payments_monthly, v WHERE year_month >= v.desde), ",
+        "rc AS (SELECT date_format(add_months(to_date(concat(max(cohort_month), '-01')), -11), 'yyyy-MM') AS desde FROM agg_repurchase_cohorts WHERE is_complete), ",
+        "recompra AS (SELECT sum(repurchased_90d) / sum(new_customers) AS repurchase_rate FROM agg_repurchase_cohorts, rc WHERE is_complete AND cohort_month >= rc.desde) ",
+        "SELECT round(net_sales_12m, 0) AS net_sales_12m, round(aov_12m, 2) AS aov_12m, round(approval_rate_12m * 100, 1) AS approval_rate_12m, double_charges_pending, round(double_charge_amount_pending, 0) AS double_charge_amount_pending, round(repurchase_rate * 100, 1) AS repurchase_rate FROM ventas, cobros, recompra"
+      ]
+    },
+    {
+      "name": "ds_ventas_canal",
+      "displayName": "Ventas netas mensuales por canal",
+      "queryLines": [
+        "SELECT to_date(concat(year_month, '-01')) AS mes, channel AS canal, sum(net_sales) AS ventas_netas ",
+        "FROM agg_sales_monthly GROUP BY ALL"
+      ]
+    },
+    {
+      "name": "ds_ventas_pais",
+      "displayName": "Ventas netas por país (12 meses)",
+      "queryLines": [
+        "WITH v AS (SELECT date_format(add_months(to_date(concat(max(year_month), '-01')), -11), 'yyyy-MM') AS desde FROM agg_sales_monthly) SELECT country AS pais, sum(net_sales) AS ventas_netas, round(sum(net_sales) / sum(orders), 2) AS ticket_promedio FROM agg_sales_monthly, v WHERE year_month >= v.desde GROUP BY country"
+      ]
+    },
+    {
+      "name": "ds_recompra",
+      "displayName": "Recompra a 90 días por cohorte",
+      "queryLines": [
+        "SELECT to_date(concat(cohort_month, '-01')) AS cohorte, round(sum(repurchased_90d) / sum(new_customers) * 100, 1) AS tasa_recompra, sum(new_customers) AS clientes_nuevos FROM agg_repurchase_cohorts WHERE is_complete GROUP BY cohort_month"
+      ]
+    },
+    {
+      "name": "ds_aprobacion",
+      "displayName": "Aprobación de pagos por método (12 meses)",
+      "queryLines": [
+        "WITH v AS (SELECT date_format(add_months(to_date(concat(max(year_month), '-01')), -11), 'yyyy-MM') AS desde FROM agg_payments_monthly) SELECT method AS metodo, round(sum(approved) / (sum(approved) + sum(rejected)) * 100, 1) AS tasa_aprobacion, sum(attempts) AS intentos FROM agg_payments_monthly, v WHERE year_month >= v.desde GROUP BY method"
+      ]
+    },
+    {
+      "name": "ds_devoluciones",
+      "displayName": "Devoluciones por categoría (12 meses)",
+      "queryLines": [
+        "WITH v AS (SELECT date_format(add_months(to_date(concat(max(year_month), '-01')), -11), 'yyyy-MM') AS desde FROM agg_returns_monthly) SELECT category AS categoria, round(sum(returned_units) / sum(sold_units) * 100, 1) AS tasa_devolucion, sum(returned_amount) AS monto_devuelto FROM agg_returns_monthly, v WHERE year_month >= v.desde GROUP BY category"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "resumen",
+      "displayName": "Resumen",
+      "layout": [
+        {
+          "widget": {
+            "name": "titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Andina Market · Indicadores clave",
+                "Ventas, retención, cobros y devoluciones. Las tarjetas resumen los **últimos 12 meses**. Fuente: tablas `agg_*` de la capa gold (definiciones en `docs/kpis.md`)."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_ventas",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen",
+                  "fields": [
+                    {
+                      "name": "net_sales_12m",
+                      "expression": "`net_sales_12m`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "net_sales_12m",
+                  "displayName": "Ventas netas (USD)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ventas netas",
+                "showDescription": true,
+                "description": "Pedidos pagados, enviados o entregados. USD."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_ticket",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen",
+                  "fields": [
+                    {
+                      "name": "aov_12m",
+                      "expression": "`aov_12m`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "aov_12m",
+                  "displayName": "Ticket promedio (USD)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ticket promedio",
+                "showDescription": true,
+                "description": "Ventas netas / pedidos. USD."
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_recompra",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen",
+                  "fields": [
+                    {
+                      "name": "repurchase_rate",
+                      "expression": "`repurchase_rate`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "repurchase_rate",
+                  "displayName": "Recompra a 90 días (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Recompra a 90 días (%)",
+                "showDescription": true,
+                "description": "Clientes nuevos que vuelven a comprar en 90 días (cohortes completas)."
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_aprobacion",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen",
+                  "fields": [
+                    {
+                      "name": "approval_rate_12m",
+                      "expression": "`approval_rate_12m`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "approval_rate_12m",
+                  "displayName": "Aprobación de pagos (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Aprobación de pagos (%)",
+                "showDescription": true,
+                "description": "Aprobados / (aprobados + rechazados)."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_dobles",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen",
+                  "fields": [
+                    {
+                      "name": "double_charges_pending",
+                      "expression": "`double_charges_pending`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "double_charges_pending",
+                  "displayName": "Dobles cobros sin devolver"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Dobles cobros sin devolver",
+                "showDescription": true,
+                "description": "Cobros duplicados que siguen aprobados (todo el histórico)."
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 5,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_monto_dobles",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen",
+                  "fields": [
+                    {
+                      "name": "double_charge_amount_pending",
+                      "expression": "`double_charge_amount_pending`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "double_charge_amount_pending",
+                  "displayName": "Monto por devolver (USD)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Monto por devolver",
+                "showDescription": true,
+                "description": "Suma de los dobles cobros sin devolver. USD."
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 5,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "ventas_canal",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ventas_canal",
+                  "fields": [
+                    {
+                      "name": "mes",
+                      "expression": "`mes`"
+                    },
+                    {
+                      "name": "canal",
+                      "expression": "`canal`"
+                    },
+                    {
+                      "name": "ventas_netas",
+                      "expression": "`ventas_netas`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Mes"
+                },
+                "y": {
+                  "fieldName": "ventas_netas",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Ventas netas (USD)"
+                },
+                "color": {
+                  "fieldName": "canal",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Canal"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ventas netas mensuales por canal",
+                "showDescription": true,
+                "description": "La app gana participación frente a la tienda física."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "ventas_pais",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ventas_pais",
+                  "fields": [
+                    {
+                      "name": "pais",
+                      "expression": "`pais`"
+                    },
+                    {
+                      "name": "ventas_netas",
+                      "expression": "`ventas_netas`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "pais",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "País"
+                },
+                "y": {
+                  "fieldName": "ventas_netas",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Ventas netas (USD)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ventas netas por país (12 meses)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "recompra",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_recompra",
+                  "fields": [
+                    {
+                      "name": "cohorte",
+                      "expression": "`cohorte`"
+                    },
+                    {
+                      "name": "tasa_recompra",
+                      "expression": "`tasa_recompra`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "cohorte",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Mes de la primera compra"
+                },
+                "y": {
+                  "fieldName": "tasa_recompra",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Tasa de recompra a 90 días (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Recompra a 90 días por cohorte",
+                "showDescription": true,
+                "description": "Solo cohortes completas (pasaron 90 días desde su último día)."
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 14,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "aprobacion_metodo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_aprobacion",
+                  "fields": [
+                    {
+                      "name": "metodo",
+                      "expression": "`metodo`"
+                    },
+                    {
+                      "name": "tasa_aprobacion",
+                      "expression": "`tasa_aprobacion`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "metodo",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y"
+                    }
+                  },
+                  "displayName": "Método de pago"
+                },
+                "y": {
+                  "fieldName": "tasa_aprobacion",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Tasa de aprobación (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Aprobación de pagos por método (12 meses)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "devoluciones_categoria",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_devoluciones",
+                  "fields": [
+                    {
+                      "name": "categoria",
+                      "expression": "`categoria`"
+                    },
+                    {
+                      "name": "tasa_devolucion",
+                      "expression": "`tasa_devolucion`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "categoria",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "Categoría"
+                },
+                "y": {
+                  "fieldName": "tasa_devolucion",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Tasa de devolución (unidades) (%)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Devoluciones por categoría (12 meses)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 20,
+            "width": 3,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ]
+}

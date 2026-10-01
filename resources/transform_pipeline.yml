@@ -23,3 +23,5 @@ resources:
             path: ../src/transform/silver_calidad.py
         - file:
             path: ../src/transform/gold_modelo.py
+        - file:
+            path: ../src/transform/gold_kpis.py

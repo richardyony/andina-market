@@ -1,0 +1,16 @@
+# Dashboard de AI/BI (nivel 3) sobre la capa analítica gold.agg_*.
+# El JSON se versiona en el repo; cada target lo despliega apuntando a su propio catálogo.
+# Las consultas corren en un SQL warehouse serverless (se enciende al abrir el dashboard y
+# se apaga solo).
+resources:
+  dashboards:
+    andina_kpis:
+      display_name: "Andina Market · KPIs (${bundle.target})"
+      file_path: ../src/dashboards/andina_kpis.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      # Las consultas usan nombres sin catálogo: el bundle fija catálogo y esquema por entorno.
+      dataset_catalog: ${var.catalog}
+      dataset_schema: gold
+      # Cada lector consulta con sus propios permisos de Unity Catalog (necesita SELECT en gold);
+      # no se comparten las credenciales de quien publica.
+      embed_credentials: false

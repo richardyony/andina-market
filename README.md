@@ -2,14 +2,14 @@
 
 Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde Azure SQL alimenta un lakehouse medallion en Unity Catalog, y de ahí salen la analítica, el feature store, RAG y los agentes.
 
-> **Estado:** en construcción. Niveles 0, 1 y 2 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, y modelo estrella en gold, todo desplegado con un bundle y orquestado en un solo job. Esta sección se actualiza por nivel.
+> **Estado:** en construcción. Niveles 0 a 3 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, todo desplegado con un bundle y orquestado en un solo job. Esta sección se actualiza por nivel.
 
 | Nivel | Alcance | Estado |
 |---|---|---|
 | 0. Fuente | Azure SQL, datos sintéticos, Change Tracking | ✅ |
 | 1. Ingesta | JDBC incremental (CT) → landing → Auto Loader → bronze; DABs; diseño streaming y SAP | ✅ |
 | 2. Transformación | Lakeflow Declarative Pipelines: silver con expectations, cuarentena, SCD1/SCD2; gold en estrella | ✅ |
-| 3. Analítica + BI | Capa de KPIs sobre gold, dashboard AI/BI | ⏳ |
+| 3. Analítica + BI | Capa de KPIs agregada en gold (4 KPIs) y dashboard de AI/BI | ✅ |
 | 4. Feature Store | Features point-in-time, MLflow en UC | ⏳ |
 | 5. RAG | Vector Search, evaluación de retrieval | ⏳ |
 | 6. Agente | Diseño o agente mínimo | ⏳ |
@@ -23,14 +23,16 @@ sample_data/        Muestra de eventos de clickstream (.jsonl)
 databricks.yml      Bundle (Declarative Automation Bundle): targets dev y prod
 resources/          Definición del job y del pipeline del bundle
 src/ingesta/        Notebooks de ingesta: extracción con CT → landing, Auto Loader → bronze
-src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2) y gold (modelo estrella)
+src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2), gold (modelo estrella) y capa de KPIs
 src/validacion/     Validación de punta a punta, última tarea del job
+src/dashboards/     Dashboard de AI/BI (.lvdash.json), desplegado por el bundle
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
 - [Arquitectura: diagramas, infraestructura, permisos y costos](docs/arquitectura.md)
 - [Modelo de datos: etapas, silver, modelo estrella y cambios en el tiempo](docs/modelo_datos.md)
 - [Reglas de limpieza, transformación y cuarentena](docs/reglas_calidad.md)
+- [KPIs y dashboard: definiciones, capa analítica y valores](docs/kpis.md)
 - [Registro de decisiones](docs/decisiones.md)
 - [Datos sintéticos y casos borde](docs/datos_sinteticos.md)
 - [Diseño: clickstream en tiempo real (Event Hubs + Structured Streaming)](docs/diseno_streaming.md)
@@ -180,6 +182,24 @@ Después de la revisión de seguridad y robustez (D-14, D-17), el entorno dev se
 - **Borrado durante una recarga completa:** genera el DELETE sintético y el ticket desaparece de silver.
 - **Job completo sin cambios en la fuente:** todas las tablas quedan idénticas, y las 21 validaciones de `ops.validation_log` pasan en cada corrida.
 
+## Cómo reproducir: KPIs y dashboard (nivel 3)
+
+La capa analítica (`gold.agg_*`) se calcula en el mismo pipeline que gold, y el dashboard se despliega con el bundle. Definiciones y valores: [docs/kpis.md](docs/kpis.md).
+
+```powershell
+databricks bundle deploy -t dev          # incluye el dashboard
+databricks bundle summary -t dev         # muestra la URL del dashboard
+```
+
+| KPI | Tabla |
+|---|---|
+| Ventas netas y ticket promedio (por mes, país, canal y segmento) | `gold.agg_sales_monthly` |
+| Recompra a 90 días por cohorte | `gold.agg_repurchase_cohorts` |
+| Aprobación de pagos y dobles cobros sin devolver | `gold.agg_payments_monthly` |
+| Tasa de devolución por categoría | `gold.agg_returns_monthly` |
+
+La validación del job comprueba en cada corrida que los agregados cuadren con los hechos.
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -190,4 +210,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Diagramas y diseños de streaming y SAP:** redactados con Claude. Las cifras del clickstream (duplicados, retrasos, anónimos) salen de analizar la muestra real; las decisiones y alternativas deben poder defenderse en la entrevista, así que conviene revisarlas.
 - **Transformación del nivel 2 (pipeline, reglas de calidad y modelo):** generados con Claude a partir del catálogo de casos borde. La validación contra los números esperados mostró tres reglas que había que afinar (duplicados, pedidos sin líneas y totales que no cuadran); el ajuste y su motivo están en D-14.
 - **Revisión de seguridad y robustez del nivel 2:** pedí a Claude una revisión crítica de lo construido. Encontró 10 debilidades (credenciales con privilegios de administrador, datos personales en gold, ejecución con usuario personal, una regla `drop` que podía inflar ventas, borrados perdidos en una recarga completa, entre otras). Decidí corregirlas, usar service principals también en dev y guardar las credenciales en Key Vault (D-14, D-17).
+- **KPIs y dashboard del nivel 3:** las definiciones, la capa agregada y el JSON del dashboard se generaron con Claude. Cada consulta del dashboard se ejecutó contra los datos para verificarla, y los valores se contrastaron con los parámetros del generador (ticket promedio, mezcla de canales, tasa de rechazo con tarjeta).
 - *(Se completa por nivel.)*
