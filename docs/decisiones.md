@@ -207,3 +207,31 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **Batch diario** con `fe.score_batch` en el job `andina_ml` (features → entrenamiento → puntuación): `ml.repurchase_scores` y `ml.urgent_ticket_scores`. Es suficiente para campañas de retención y para ordenar la cola de soporte cada mañana.
 - **Reentrenamiento en el mismo job, por simplicidad.** En producción se separaría: las features y la puntuación a diario, el reentrenamiento semanal o cuando se degrade el modelo, y la promoción a `champion` solo si la versión nueva supera a la actual en la evaluación temporal.
 - **Baja latencia, diseñada y no desplegada:** tabla online sincronizada desde `ml.customer_features` + Model Serving del modelo `@champion` (que busca las features solo, porque se registró con `fe.log_model`). No se desplegó porque cuesta mientras está encendido y el caso de uso actual es batch.
+
+## D-22. Documentos y chunking del RAG
+
+- **Corpus generado con IA y coherente con los datos:** 11 documentos (políticas de devolución, envíos y garantías; FAQs de pagos y de cuenta; programa de clientes; atención al cliente; manuales por categoría) en `rag_docs/`. Usan los mismos métodos de pago por canal, las mismas reglas de segmento del CRM, los mismos tipos de ticket y prioridades, y las mismas categorías y marcas que la base. A eso se suma un chunk por producto del catálogo (`silver.products`).
+- **Documentos en un Volume de Unity Catalog** (`genai.docs`): el repositorio es la fuente versionada y el Volume la copia gobernada (permisos, linaje). Un documento borrado del repositorio se borra del Volume y sus chunks del índice.
+- **Chunking por sección (`##`), con el título del documento y de la sección al inicio de cada chunk.** Cada sección responde una pregunta concreta ("plazos de reembolso por método de pago"); el título da contexto al embedding. Las secciones de más de 1.200 caracteres se dividen por párrafos, con un párrafo de solapamiento.
+- **Descartado: chunks de tamaño fijo (por ejemplo, 500 tokens).** Parten tablas y listas a la mitad y mezclan dos temas en un chunk, lo que empeora tanto el retrieval como la cita de la fuente.
+- **Un chunk por producto**, con nombre, SKU, categoría, marca, precio, estado (disponible o descontinuado) y descripción en texto: las preguntas de catálogo se responden con datos reales y actualizados.
+
+## D-23. Embeddings, índice y actualización
+
+- **Embeddings: se eligió `databricks-qwen3-embedding-0-6b` (multilingüe) y se usa `databricks-gte-large-en`.** El modelo multilingüe es lo correcto para documentos y preguntas en español, y la primera corrida lo confirmó (recall@5 de 1,0 frente a 0,87-0,93 con gte). Pero su endpoint dejó de estar disponible en el workspace después de esa corrida. Se cambió a `gte-large-en` (admite textos más largos que `bge-large-en`) con búsqueda híbrida para compensar con palabras exactas; volver a un modelo multilingüe estable es la mejora inmediata.
+- **Generación con `databricks-meta-llama-3-3-70b-instruct`:** los endpoints de Claude figuran en el workspace con cuota 0. Llama 3.3 responde bien en español, devuelve texto plano y soporta tool calling para el nivel 6.
+- **Lección:** que un endpoint aparezca en la lista no garantiza que esté disponible. La ingesta ahora verifica que la última sincronización del índice no haya fallado, además del conteo de filas.
+- **Mejoras guiadas por la evaluación:** linealizar las tablas de Markdown (cada fila como frase) y usar el vocabulario del cliente subieron el recall@5 híbrido de 0,867 a 0,933. Detalle en [rag.md](rag.md).
+- **Vector Search con índice Delta Sync** sobre `genai.doc_chunks` (con Change Data Feed) y embeddings gestionados: Databricks calcula los embeddings al sincronizar, sin código propio de embeddings.
+- **Actualización incremental e idempotente:** la tabla de chunks se actualiza con `MERGE` por hash del contenido (solo cambia lo que cambió, y se borran los chunks de secciones eliminadas), y el índice en modo *triggered* procesa solo esos cambios al sincronizar. El job `andina_rag` corre a diario (después del de ML, porque el catálogo puede cambiar) o cuando se actualizan documentos.
+- **SDK de Databricks en lugar del paquete `databricks-vectorsearch`:** instalar ese paquete bajaba la versión de protobuf y rompía el entorno serverless antes de arrancar.
+- **Costo:** el endpoint de Vector Search se cobra por hora mientras exista, a diferencia del resto del proyecto. Se creó solo en dev; para el reto conviene borrarlo cuando no se usa (el job lo recrea solo).
+
+## D-24. Evaluación del retrieval y trazabilidad
+
+- **Golden set de 30 preguntas** redactadas como las haría un cliente (no copiadas del documento), cada una con la sección o el producto que la responde; algunas admiten más de una fuente válida.
+- **Métricas:** recall@1, @3 y @5 y MRR, comparando búsqueda vectorial (ANN) e híbrida (vectorial + palabras clave). Se guardan en `genai.retrieval_eval_summary` y en MLflow, y cada pregunta con su rango en `genai.retrieval_eval`, para ver qué falla.
+- **Umbral de calidad:** si el recall@5 cae por debajo de 0,80 (por un cambio de documentos o de chunking), la tarea falla en lugar de dejar en uso un índice peor.
+- **Trazabilidad de cada respuesta:** las respuestas generadas citan las fuentes ([n] → documento y sección), y cada chunk guarda su `source` (archivo del Volume o tabla de silver). Unity Catalog da el linaje Volume → `genai.doc_chunks` → índice.
+- **Generación acotada:** el modelo responde solo con los fragmentos recuperados y, si no alcanzan, lo dice y deriva al chat. Es la primera defensa contra respuestas inventadas, pero no basta: en un ejemplo el modelo leyó mal un fragmento correcto (costo de envío a Arequipa). Por eso el nivel 6 usa herramientas deterministas para los cálculos y se propone evaluar la fidelidad de las respuestas con un juez automático.
+- **Búsqueda híbrida en uso:** con `gte-large-en`, la híbrida supera a la vectorial pura en recall@5 y MRR, porque las palabras exactas compensan lo que el modelo en inglés no capta del español.

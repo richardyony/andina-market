@@ -1,0 +1,28 @@
+# Job del nivel 5 (RAG): documentos → chunks → índice vectorial → evaluación del retrieval.
+# Se ejecuta cuando cambian los documentos o el catálogo; el índice Delta Sync toma solo los cambios.
+resources:
+  jobs:
+    andina_rag:
+      name: andina_rag_${bundle.target}
+      description: Ingesta de documentos a Vector Search y evaluación con el golden set.
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"   # diario, después del job de ML (el catálogo puede cambiar)
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause}
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+      tasks:
+        - task_key: ingest_index
+          notebook_task:
+            notebook_path: ../src/rag/01_ingest_index.py
+          timeout_seconds: 5400
+        - task_key: evaluate
+          depends_on: [{task_key: ingest_index}]
+          notebook_task:
+            notebook_path: ../src/rag/02_evaluate.py
+          timeout_seconds: 3600

@@ -2,7 +2,7 @@
 
 Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde Azure SQL alimenta un lakehouse medallion en Unity Catalog, y de ahí salen la analítica, el feature store, RAG y los agentes.
 
-> **Estado:** en construcción. Niveles 0 a 4 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, feature store point-in-time y dos modelos registrados con MLflow, todo desplegado con un bundle y orquestado en jobs. Esta sección se actualiza por nivel.
+> **Estado:** en construcción. Niveles 0 a 5 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, feature store point-in-time y dos modelos registrados con MLflow, y una capa RAG evaluada con un golden set, todo desplegado con un bundle y orquestado en jobs. Esta sección se actualiza por nivel.
 
 | Nivel | Alcance | Estado |
 |---|---|---|
@@ -11,7 +11,7 @@ Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde 
 | 2. Transformación | Lakeflow Declarative Pipelines: silver con expectations, cuarentena, SCD1/SCD2; gold en estrella | ✅ |
 | 3. Analítica + BI | Capa de KPIs agregada en gold (4 KPIs) y dashboard de AI/BI | ✅ |
 | 4. Feature Store | Features point-in-time en UC, modelos de recompra y tickets urgentes con MLflow, puntuación batch | ✅ |
-| 5. RAG | Vector Search, evaluación de retrieval | ⏳ |
+| 5. RAG | Documentos en un Volume, chunking por sección, Vector Search (Delta Sync), golden set con recall@k | ✅ |
 | 6. Agente | Diseño o agente mínimo | ⏳ |
 
 ## Estructura
@@ -27,6 +27,8 @@ src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2), gold (mod
 src/validacion/     Validación de punta a punta, última tarea del job
 src/dashboards/     Dashboard de AI/BI (.lvdash.json), desplegado por el bundle
 src/ml/             Feature store, entrenamiento con MLflow y puntuación batch (nivel 4)
+src/rag/            Ingesta e indexación de documentos, evaluación del retrieval (nivel 5)
+rag_docs/           Documentos de Andina Market para el RAG (políticas, FAQs, manuales)
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
@@ -35,6 +37,7 @@ docs/               Decisiones de arquitectura y documentación de datos
 - [Reglas de limpieza, transformación y cuarentena](docs/reglas_calidad.md)
 - [KPIs y dashboard: definiciones, capa analítica y valores](docs/kpis.md)
 - [Feature store y modelos: guía para un ML engineer](docs/feature_store.md)
+- [Capa RAG: documentos, chunking, índice, evaluación y ejemplos](docs/rag.md)
 - [Registro de decisiones](docs/decisiones.md)
 - [Datos sintéticos y casos borde](docs/datos_sinteticos.md)
 - [Diseño: clickstream en tiempo real (Event Hubs + Structured Streaming)](docs/diseno_streaming.md)
@@ -177,6 +180,7 @@ Resultado de las pruebas del 30/09/2026:
 - **Consistencia:** las ventas de gold cuadran al centavo con silver.
 - **Incremental:** un día simulado pasó por el job completo y abrió nuevas versiones SCD2 de segmentos y pagos.
 - **Idempotencia:** volver a ejecutar el pipeline sin datos nuevos deja todas las tablas idénticas, incluidas las claves sustitutas.
+- **Promoción a producción:** el mismo bundle se desplegó con `-t prod` (catálogo `andina_prod`, identidad `sp-andina-prod`) y el job completo pasó todas las validaciones en la primera corrida, sin cambiar código.
 
 Después de la revisión de seguridad y robustez (D-14, D-17), el entorno dev se reconstruyó desde cero como `sp-andina-dev` y reprodujo los mismos totales. Además se probaron en vivo los escenarios corregidos:
 - **Línea que pasa a cantidad 0:** sale de silver y las ventas bajan exactamente su importe (38,70 USD).
@@ -226,6 +230,17 @@ databricks bundle run andina_ml -t dev
 
 Resultados de la evaluación temporal: recompra a 90 días con ROC AUC 0,822 (frente a 0,780 de ordenar por recencia); tickets urgentes con ROC AUC 0,854 y PR AUC 0,66 sobre un 18,7 % de urgentes. Se verificó con SQL independiente que las features de cada foto solo cuentan hechos anteriores a su fecha.
 
+## Cómo reproducir: capa RAG (nivel 5)
+
+Job `andina_rag` (serverless): documentos de `rag_docs/` al Volume `genai.docs` → chunks por sección en `genai.doc_chunks` → índice Delta Sync de Vector Search → evaluación con el golden set. Detalle, métricas y ejemplos: [docs/rag.md](docs/rag.md).
+
+```powershell
+databricks bundle deploy -t dev
+databricks bundle run andina_rag -t dev
+```
+
+Resultado con búsqueda híbrida: recall@5 de 0,933 y MRR de 0,769 sobre 30 preguntas. El endpoint de Vector Search se cobra por hora mientras exista: borrarlo cuando no se use (el job lo recrea).
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -238,4 +253,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Revisión de seguridad y robustez del nivel 2:** pedí a Claude una revisión crítica de lo construido. Encontró 10 debilidades (credenciales con privilegios de administrador, datos personales en gold, ejecución con usuario personal, una regla `drop` que podía inflar ventas, borrados perdidos en una recarga completa, entre otras). Decidí corregirlas, usar service principals también en dev y guardar las credenciales en Key Vault (D-14, D-17).
 - **KPIs y dashboard del nivel 3:** las definiciones, la capa agregada y el JSON del dashboard se generaron con Claude. Cada consulta del dashboard se ejecutó contra los datos para verificarla, y los valores se contrastaron con los parámetros del generador (ticket promedio, mezcla de canales, tasa de rechazo con tarjeta). Al revisar las capturas detecté que las primeras cohortes de recompra salían infladas por censura por la izquierda (clientes registrados antes del historial); se corrigió la definición (D-18).
 - **Feature store y modelos del nivel 4:** el diseño (fotos semanales point-in-time, exclusión del segmento por fuga del futuro, validación temporal, línea base) y el código se generaron con Claude. Las métricas son las de la corrida real; el point-in-time se verificó con una consulta independiente.
+- **Capa RAG del nivel 5:** los 11 documentos de Andina Market se generaron con Claude a partir de los datos de la base (mismos métodos de pago, reglas de segmento, tipos de ticket y catálogo), como pide el reto. El pipeline, el golden set y la evaluación también. Las métricas son las reales; la evaluación guió dos mejoras (tablas linealizadas, vocabulario del cliente) y mostró una respuesta con un error que se documenta en lugar de esconderse.
 - *(Se completa por nivel.)*

@@ -1,0 +1,304 @@
+[
+ {
+  "q": "¿Cuántos días tengo para devolver algo que compré?",
+  "relevant": [
+   [
+    "politica_devoluciones",
+    "Plazo para devolver un producto"
+   ]
+  ]
+ },
+ {
+  "q": "Abrí una crema y no me gustó, ¿la puedo devolver?",
+  "relevant": [
+   [
+    "politica_devoluciones",
+    "Productos que no se pueden devolver"
+   ],
+   [
+    "guia_belleza_mascotas",
+    "Belleza: productos cosméticos"
+   ]
+  ]
+ },
+ {
+  "q": "Si pagué con billetera digital, ¿en cuánto tiempo me devuelven la plata?",
+  "relevant": [
+   [
+    "politica_devoluciones",
+    "Reembolsos: plazos por método de pago"
+   ]
+  ]
+ },
+ {
+  "q": "Quiero cambiar un polo por una talla más grande",
+  "relevant": [
+   [
+    "guia_moda_deportes",
+    "Cambios de talla"
+   ],
+   [
+    "politica_devoluciones",
+    "Cambios de talla y de producto"
+   ]
+  ]
+ },
+ {
+  "q": "¿Cuánto demora en llegar un pedido a Lima?",
+  "relevant": [
+   [
+    "politica_envios",
+    "Plazos de entrega"
+   ]
+  ]
+ },
+ {
+  "q": "¿Desde qué monto no pago envío?",
+  "relevant": [
+   [
+    "politica_envios",
+    "Costo de envío"
+   ]
+  ]
+ },
+ {
+  "q": "El courier marcó mi pedido como entregado pero nunca llegó",
+  "relevant": [
+   [
+    "politica_envios",
+    "Pedido marcado como entregado que no recibiste"
+   ]
+  ]
+ },
+ {
+  "q": "¿Puedo pagar en efectivo si compro por la app?",
+  "relevant": [
+   [
+    "faq_pagos",
+    "¿Qué métodos de pago aceptan?"
+   ]
+  ]
+ },
+ {
+  "q": "Me rechazan la tarjeta y sí tengo saldo, ¿por qué?",
+  "relevant": [
+   [
+    "faq_pagos",
+    "¿Por qué rechazaron mi pago con tarjeta?"
+   ]
+  ]
+ },
+ {
+  "q": "Me aparecen dos cargos iguales por la misma compra",
+  "relevant": [
+   [
+    "faq_pagos",
+    "Me cobraron dos veces el mismo pedido"
+   ]
+  ]
+ },
+ {
+  "q": "Hice una transferencia y mi pedido sigue sin moverse",
+  "relevant": [
+   [
+    "faq_pagos",
+    "Pagué por transferencia y mi pedido sigue pendiente"
+   ]
+  ]
+ },
+ {
+  "q": "No me llega el correo para restablecer mi clave",
+  "relevant": [
+   [
+    "faq_cuenta_seguridad",
+    "No me llega el correo para recuperar la contraseña"
+   ]
+  ]
+ },
+ {
+  "q": "Alguien hizo un pedido con mi cuenta sin mi permiso",
+  "relevant": [
+   [
+    "faq_cuenta_seguridad",
+    "Alguien hizo una compra con mi cuenta"
+   ],
+   [
+    "faq_pagos",
+    "No reconozco un cargo de Andina Market"
+   ]
+  ]
+ },
+ {
+  "q": "¿Qué tengo que hacer para ser cliente VIP?",
+  "relevant": [
+   [
+    "programa_clientes",
+    "Niveles del programa"
+   ]
+  ]
+ },
+ {
+  "q": "¿Qué ventajas tiene un cliente frecuente?",
+  "relevant": [
+   [
+    "programa_clientes",
+    "Beneficios por nivel"
+   ]
+  ]
+ },
+ {
+  "q": "¿Cuánto tiempo de garantía tiene una laptop?",
+  "relevant": [
+   [
+    "garantias",
+    "Plazos de garantía"
+   ],
+   [
+    "manual_electronica",
+    "Laptops y monitores"
+   ]
+  ]
+ },
+ {
+  "q": "Mi secador de pelo huele a quemado, ¿qué hago?",
+  "relevant": [
+   [
+    "garantias",
+    "Producto que se sobrecalienta o huele a quemado"
+   ],
+   [
+    "guia_belleza_mascotas",
+    "Belleza: secadores, planchas y cuidado personal eléctrico"
+   ],
+   [
+    "manual_electronica",
+    "Problemas frecuentes"
+   ]
+  ]
+ },
+ {
+  "q": "¿Hasta qué hora atienden por chat?",
+  "relevant": [
+   [
+    "atencion_cliente",
+    "Canales de atención"
+   ]
+  ]
+ },
+ {
+  "q": "¿En cuánto tiempo responden si mi caso es urgente?",
+  "relevant": [
+   [
+    "atencion_cliente",
+    "Prioridades y tiempos de respuesta"
+   ]
+  ]
+ },
+ {
+  "q": "¿Cómo conecto mis audífonos bluetooth al celular por primera vez?",
+  "relevant": [
+   [
+    "manual_electronica",
+    "Audífonos inalámbricos"
+   ]
+  ]
+ },
+ {
+  "q": "¿Puedo subir al avión con mi batería portátil?",
+  "relevant": [
+   [
+    "manual_electronica",
+    "Cargadores, baterías portátiles y power banks"
+   ]
+  ]
+ },
+ {
+  "q": "¿Las ollas sirven para cocina de inducción?",
+  "relevant": [
+   [
+    "manual_hogar",
+    "Ollas y sartenes"
+   ]
+  ]
+ },
+ {
+  "q": "¿Cómo lavo una chompa de alpaca?",
+  "relevant": [
+   [
+    "guia_moda_deportes",
+    "Cuidado de prendas"
+   ]
+  ]
+ },
+ {
+  "q": "¿Cómo cambio la comida de mi perro sin que le caiga mal?",
+  "relevant": [
+   [
+    "guia_belleza_mascotas",
+    "Mascotas: alimentos"
+   ]
+  ]
+ },
+ {
+  "q": "¿Cuántas horas de batería tienen los audífonos Inti Tech Lite?",
+  "relevant": [
+   [
+    "producto:ELE-00001",
+    null
+   ]
+  ]
+ },
+ {
+  "q": "¿La arrocera Mistura de 2.8 litros trae vaporera?",
+  "relevant": [
+   [
+    "producto:HOG-00001",
+    null
+   ],
+   [
+    "manual_hogar",
+    "Arroceras"
+   ]
+  ]
+ },
+ {
+  "q": "¿Qué garantía tiene la bicicleta montañera aro 29 de Andina Basics?",
+  "relevant": [
+   [
+    "producto:DEP-00003",
+    null
+   ]
+  ]
+ },
+ {
+  "q": "¿El foco inteligente RGB de Inti Tech funciona con asistentes de voz?",
+  "relevant": [
+   [
+    "producto:ELE-00009",
+    null
+   ],
+   [
+    "manual_electronica",
+    "Hogar inteligente: focos y cámaras"
+   ]
+  ]
+ },
+ {
+  "q": "¿En la mochila urbana Qhapaq entra una laptop de 15 pulgadas?",
+  "relevant": [
+   [
+    "producto:MOD-00004",
+    null
+   ]
+  ]
+ },
+ {
+  "q": "¿Qué ingredientes tiene el shampoo sin sulfatos de Andina Basics?",
+  "relevant": [
+   [
+    "producto:BEL-00001",
+    null
+   ]
+  ]
+ }
+]
