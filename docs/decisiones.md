@@ -246,3 +246,21 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **Descartado: una vista enmascarada aparte.** Duplica objetos y deja la tabla base expuesta a quien tenga permiso sobre ella; la máscara protege la tabla misma, la consulte quien la consulte.
 - **Grupo local del workspace** (`is_member`): crear grupos a nivel de cuenta requiere ser administrador de la cuenta de Databricks. En producción sería un grupo de cuenta sincronizado desde Entra ID y la función usaría `is_account_group_member`.
 - **Alerta de presupuesto** `andina-reto-mensual` en la suscripción: 20 USD al mes, con avisos por correo al 50 % y al 90 % del gasto real y al 100 % del proyectado. La suscripción no tiene límite de gasto, y el único costo continuo (el endpoint de Vector Search) se apaga cuando no se usa.
+
+## D-26. Promoción manual de la v4 del modelo de recompra (2 de octubre de 2026)
+
+- **Contexto:** al pasar las features a nivel de persona (D-19), la v4 se entrenó con una observación por persona y etiquetas que suman todas sus cuentas. La regla automática (D-20) la dejó como `challenger`: su ROC AUC (0,8222) quedó 0,0005 por debajo del champion v2 (0,8227) en el mismo conjunto de prueba.
+- **Por qué no basta la regla automática:** la v4 corrige un error de método (la v2 contaba dos veces a las personas con dos cuentas, en las features y en el entrenamiento). Esa mejora es de corrección, no de métrica: la regla protege contra modelos peores, y una persona decide cuando la diferencia está dentro del ruido.
+- **Evidencia** (job `andina_ml_promocion`, notebook `src/ml/06_comparar_versiones.py`): las dos versiones puntuadas con `score_batch` sobre el mismo conjunto de prueba por persona (12.415 observaciones de 3.439 personas, desde el 15/03/2026). Intervalo de confianza con **bootstrap pareado y agrupado por persona** (1.000 remuestreos de personas, no de filas, porque cada persona aparece en varios meses):
+
+  | | AUC | IC 95 % |
+  |---|---|---|
+  | v2 | 0,8227 | [0,8113 ; 0,8341] |
+  | v4 | 0,8222 | [0,8107 ; 0,8332] |
+  | v4 − v2 | −0,0005 | [−0,0029 ; +0,0018] |
+
+- **Criterio de equivalencia, fijado antes de mirar el resultado:** el IC 95 % de la diferencia contiene 0 y cae dentro de ±0,01 de AUC. Se cumple holgadamente: el intervalo es casi diez veces más angosto que el margen.
+- **Decisión:** `champion` → v4 y `previous` → v2. La v4 lleva los tags `promocion=manual`, `aprobado_por=Richard`, `motivo` y `evidencia` (con el intervalo), y la corrida queda en MLflow con el detalle en `comparacion.json`.
+- **Cómo revertir:** mover `champion` a la versión de `@previous`; la puntuación usa siempre `@champion`, así que no hay que tocar código.
+- **Descartado: bajar el umbral de la regla automática para que la v4 pasara sola.** Habría debilitado la protección para todos los reentrenamientos futuros por un caso puntual.
+- **Descartado: bootstrap por fila.** Trata como independientes las observaciones de una misma persona en distintos meses y da intervalos falsamente estrechos.

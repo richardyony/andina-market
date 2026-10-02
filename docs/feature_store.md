@@ -115,7 +115,7 @@ No se desplegó porque una tabla online y un endpoint cuestan mientras están en
 
 Evaluación temporal: se entrena con el pasado y se evalúa con meses posteriores. Cada corrida queda en el experimento de MLflow `/Shared/andina_market/<catalog>_*`. Resultados al 1 de octubre de 2026 (dev):
 
-### Propensión de recompra: `ml.repurchase_propensity@champion` (v2; la v3 quedó como challenger)
+### Propensión de recompra: `ml.repurchase_propensity@champion` (v4 desde el 02/10; las métricas de abajo son de la v2, equivalente según D-26)
 
 | Métrica | Valor |
 |---|---|
@@ -138,6 +138,10 @@ Evaluación temporal: se entrena con el pasado y se evalúa con meses posteriore
 | Con umbral 0,5 | recall 68 %, precisión 60 % |
 
 **Lectura:** con un 8 % de ruido en las etiquetas de origen, un modelo perfecto no es posible. El umbral se elige según la capacidad del equipo de soporte: bajarlo encuentra más urgentes a cambio de más falsos positivos.
+
+### Promoción manual de la v4 (D-26)
+
+La v4 (features y etiquetas por persona) quedó 0,0005 de AUC por debajo de la v2, dentro del ruido. Un bootstrap pareado y agrupado por persona sobre el mismo conjunto de prueba (3.439 personas) dio un IC 95 % de la diferencia de [−0,0029 ; +0,0018]: equivalentes. Como la v4 corrige un error de método, se promovió a mano con el job `andina_ml_promocion`: `champion` → v4, `previous` → v2 (para revertir), con los tags `promocion=manual`, `aprobado_por` y `motivo`.
 
 ### Promoción con control
 

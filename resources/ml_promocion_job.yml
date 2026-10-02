@@ -1,0 +1,32 @@
+# Promoción manual de un modelo con evidencia: compara dos versiones sobre el mismo conjunto de
+# prueba (bootstrap por persona) y, solo si son equivalentes y apply=true, mueve champion y deja
+# previous para revertir, con tags de auditoría. Sin schedule: lo dispara una persona.
+# Corre con el service principal del entorno (dueño de los modelos), no con el usuario.
+resources:
+  jobs:
+    andina_ml_promocion:
+      name: andina_ml_promocion_${bundle.target}
+      description: Comparación de versiones del modelo de recompra y promoción manual auditada.
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: version_a
+          default: "2"
+        - name: version_b
+          default: "4"
+        - name: n_boot
+          default: "1000"
+        - name: margin
+          default: "0.01"
+        - name: apply
+          default: "false"
+        - name: motivo
+          default: ""
+        - name: aprobado_por
+          default: ""
+      tasks:
+        - task_key: comparar_y_promover
+          notebook_task:
+            notebook_path: ../src/ml/06_comparar_versiones.py
+          timeout_seconds: 3600
