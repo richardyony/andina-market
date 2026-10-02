@@ -66,10 +66,34 @@ def customers_changes():
 # ---------------------------------------------------------------------------
 # 2a. Estado actual (SCD1)
 # ---------------------------------------------------------------------------
+# Datos personales con máscara de columna de Unity Catalog: solo el grupo andina-pii-readers
+# (los service principals del pipeline, que los necesitan para detectar duplicados) ve el valor
+# real; cualquier otro lector ve "***@dominio", "A***" o "*** 321" (D-25).
+MASKS = f"{CATALOG}.ops"
 dp.create_streaming_table(
     name="silver.customers",
-    comment="Clientes, estado actual (SCD1). Email y país normalizados; banderas de calidad.",
+    comment="Clientes, estado actual (SCD1). Email y país normalizados; banderas de calidad. "
+            "Nombre, email y teléfono enmascarados para quien no está en andina-pii-readers.",
     cluster_by=["customer_id"],
+    schema=f"""
+        customer_id INT,
+        first_name STRING MASK {MASKS}.mask_name,
+        last_name STRING MASK {MASKS}.mask_name,
+        email STRING MASK {MASKS}.mask_email,
+        email_norm STRING MASK {MASKS}.mask_email,
+        email_valido BOOLEAN,
+        phone STRING MASK {MASKS}.mask_phone,
+        city STRING,
+        country_raw STRING,
+        country_iso STRING,
+        segment STRING,
+        signup_date DATE,
+        created_at TIMESTAMP,
+        updated_at TIMESTAMP,
+        _ct_version BIGINT,
+        _batch_id STRING,
+        _ingested_at TIMESTAMP
+    """,
 )
 dp.create_auto_cdc_flow(
     target="silver.customers",

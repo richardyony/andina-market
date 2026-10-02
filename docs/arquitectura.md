@@ -145,7 +145,9 @@ flowchart TB
 |---|---|---|---|
 | `sp-andina-dev` (`run_as` del target dev) | `ALL PRIVILEGES` | — | `READ` |
 | `sp-andina-prod` (`run_as` del target prod) | — | `ALL PRIVILEGES` | `READ` |
-| Usuario del candidato (despliega el bundle) | Dueño del catálogo | Dueño del catálogo | `MANAGE` |
+| Usuario del candidato (despliega el bundle) | Dueño del catálogo; `ALL PRIVILEGES` | Dueño del catálogo; solo lectura | `MANAGE` |
+
+**Datos personales:** `silver.customers` tiene máscaras de columna en nombre, apellido, email y teléfono (D-25). Solo el grupo `andina-pii-readers` (los dos service principals, que los necesitan para detectar duplicados) ve el valor real; el usuario del candidato ve los datos enmascarados.
 
 **Propuesto para un equipo** (los grupos no se crearon porque el reto tiene un solo usuario):
 
@@ -156,7 +158,7 @@ flowchart TB
 | Grupo `data-science` | `SELECT` en silver; `ALL PRIVILEGES` en ml | `SELECT` en silver y gold; `MODIFY` en ml |
 | Aplicaciones GenAI | — | `SELECT` en genai y funciones de UC específicas |
 
-Principios: nadie escribe en prod a mano; bronze y ops solo los escribe el pipeline; los datos personales viven en silver, cuyo acceso se limita a ingeniería y ciencia de datos, y gold no los tiene.
+Principios: nadie escribe en prod a mano; bronze y ops solo los escribe el pipeline; los datos personales viven en silver, enmascarados para quien no está en `andina-pii-readers`, y gold no los tiene.
 
 ### Costos
 

@@ -6,7 +6,7 @@
 # MAGIC
 # MAGIC | Tabla | Clave | Contenido |
 # MAGIC |---|---|---|
-# MAGIC | `ml.customer_features` | `customer_id` + `as_of_ts` (**clave de tiempo**) | Foto semanal del comportamiento de cada cliente |
+# MAGIC | `ml.customer_features` | `customer_id` + `as_of_ts` (**clave de tiempo**) | Foto semanal del comportamiento de cada cliente, sumando todas las cuentas de la misma persona |
 # MAGIC | `ml.ticket_features` | `ticket_id` | Texto y atributos de cada ticket al momento de crearse |
 # MAGIC
 # MAGIC **Point-in-time:** la foto de un cliente en `as_of_ts` se calcula solo con hechos **anteriores**
@@ -51,9 +51,21 @@ snapshots = spark.sql(f"""
         date_trunc('week', TIMESTAMP'{bounds.hi}') + INTERVAL 7 DAYS,
         INTERVAL 7 DAYS)) AS as_of_ts""")
 
+# Las features son de la PERSONA, no de la cuenta: si alguien tiene dos cuentas (por ejemplo, una
+# creada en tienda), sus pedidos, tickets y pagos se suman como un solo cliente. La clave de la
+# tabla sigue siendo customer_id: cada cuenta recibe las features de su persona.
 customers = spark.table(f"{s}.customers").select("customer_id", "signup_date")
-# Un cliente aparece desde la primera foto posterior a su alta.
-grid = customers.crossJoin(snapshots).where(F.col("signup_date") < F.to_date("as_of_ts"))
+duplicates = spark.table(f"{s}.customer_duplicates").select("customer_id", "principal_customer_id")
+account_person = (
+    customers.join(duplicates, "customer_id", "left")
+    .select("customer_id", "signup_date",
+            F.coalesce("principal_customer_id", "customer_id").alias("person_id"))
+)
+person_signup = account_person.groupBy("person_id").agg(F.min("signup_date").alias("signup_date"))
+# Una persona aparece desde la primera foto posterior a su primer registro.
+grid = person_signup.crossJoin(snapshots).where(F.col("signup_date") < F.to_date("as_of_ts"))
+to_person = account_person.select("customer_id", "person_id")
+orders = orders.join(to_person, "customer_id").drop("customer_id")
 
 
 def window_count(cond, days):
@@ -65,8 +77,8 @@ def window_count(cond, days):
 
 # COMMAND ----------
 
-past_orders = grid.join(orders, "customer_id").where(F.col("ts") < F.col("as_of_ts"))
-order_feats = past_orders.groupBy("customer_id", "as_of_ts").agg(
+past_orders = grid.join(orders, "person_id").where(F.col("ts") < F.col("as_of_ts"))
+order_feats = past_orders.groupBy("person_id", "as_of_ts").agg(
     window_count(F.lit(True), 90).alias("orders_90d"),
     window_count(F.lit(True), 365).alias("orders_365d"),
     F.sum(F.when(F.col("ts") >= F.col("as_of_ts") - F.expr("INTERVAL 365 DAYS"), F.col("total_amount"))).alias("net_sales_365d"),
@@ -81,12 +93,12 @@ products = spark.table(f"{s}.products").select("product_id", "category")
 cat_units = (
     past_orders.where(F.col("ts") >= F.col("as_of_ts") - F.expr("INTERVAL 365 DAYS"))
     .join(items, "order_id").join(products, "product_id")
-    .groupBy("customer_id", "as_of_ts", "category").agg(F.sum("quantity").alias("u"))
+    .groupBy("person_id", "as_of_ts", "category").agg(F.sum("quantity").alias("u"))
 )
-w_cat = Window.partitionBy("customer_id", "as_of_ts").orderBy(F.col("u").desc(), F.col("category"))
+w_cat = Window.partitionBy("person_id", "as_of_ts").orderBy(F.col("u").desc(), F.col("category"))
 fav_cat = (
     cat_units.withColumn("rn", F.row_number().over(w_cat)).where("rn = 1")
-    .select("customer_id", "as_of_ts", F.col("category").alias("favorite_category_365d"))
+    .select("person_id", "as_of_ts", F.col("category").alias("favorite_category_365d"))
 )
 
 # COMMAND ----------
@@ -95,10 +107,13 @@ fav_cat = (
 
 # COMMAND ----------
 
-tickets = spark.table(f"{s}.support_tickets").select("customer_id", F.col("created_at").alias("ts"), "priority")
+tickets = (
+    spark.table(f"{s}.support_tickets").select("customer_id", F.col("created_at").alias("ts"), "priority")
+    .join(to_person, "customer_id").drop("customer_id")
+)
 ticket_feats = (
-    grid.join(tickets, "customer_id").where(F.col("ts") < F.col("as_of_ts"))
-    .groupBy("customer_id", "as_of_ts").agg(
+    grid.join(tickets, "person_id").where(F.col("ts") < F.col("as_of_ts"))
+    .groupBy("person_id", "as_of_ts").agg(
         window_count(F.lit(True), 90).alias("tickets_90d"),
         window_count(F.col("priority") == "Urgente", 90).alias("urgent_tickets_90d"),
     )
@@ -111,10 +126,11 @@ rejections = (
     spark.table(f"{s}.payment_status_history").where("status = 'Rechazado'")
     .select("order_id", F.col("__START_AT.updated_at").alias("ts"))
     .join(spark.table(f"{s}.orders").select("order_id", "customer_id"), "order_id")
+    .join(to_person, "customer_id").drop("customer_id")
 )
 payment_feats = (
-    grid.join(rejections, "customer_id").where(F.col("ts") < F.col("as_of_ts"))
-    .groupBy("customer_id", "as_of_ts").agg(window_count(F.lit(True), 90).alias("rejected_payments_90d"))
+    grid.join(rejections, "person_id").where(F.col("ts") < F.col("as_of_ts"))
+    .groupBy("person_id", "as_of_ts").agg(window_count(F.lit(True), 90).alias("rejected_payments_90d"))
 )
 
 # COMMAND ----------
@@ -124,10 +140,12 @@ payment_feats = (
 # COMMAND ----------
 
 customer_features = (
-    grid.join(order_feats, ["customer_id", "as_of_ts"], "left")
-    .join(fav_cat, ["customer_id", "as_of_ts"], "left")
-    .join(ticket_feats, ["customer_id", "as_of_ts"], "left")
-    .join(payment_feats, ["customer_id", "as_of_ts"], "left")
+    grid.join(order_feats, ["person_id", "as_of_ts"], "left")
+    .join(fav_cat, ["person_id", "as_of_ts"], "left")
+    .join(ticket_feats, ["person_id", "as_of_ts"], "left")
+    .join(payment_feats, ["person_id", "as_of_ts"], "left")
+    # Cada cuenta de la persona recibe la misma fila de features.
+    .join(to_person, "person_id")
     .select(
         F.col("customer_id").cast("int").alias("customer_id"),
         "as_of_ts",

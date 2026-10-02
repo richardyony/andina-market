@@ -48,6 +48,8 @@ Clave primaria `customer_id` + `as_of_ts` (**clave de tiempo**). Una fila por cl
 
 "Compra efectiva" = pedido Pagado, Enviado o Entregado, igual que en los KPIs del nivel 3.
 
+**Las features son de la persona, no de la cuenta.** Si alguien tiene dos cuentas (las 57 cuentas duplicadas que detecta silver), sus pedidos, tickets y pagos se suman, y `tenure_days` cuenta desde su primer registro. La clave sigue siendo `customer_id`: cualquiera de sus cuentas devuelve las mismas features, así que quien consume no tiene que saber nada de duplicados. La validación del job lo comprueba (`ml.cuentas_de_una_persona_con_features_distintas = 0`).
+
 ### `ml.ticket_features`: el ticket al momento de crearse
 
 Clave primaria `ticket_id`. Campos: `subject`, `body`, `channel`, `body_length`, `has_order`, `created_hour` (y `customer_id`, `created_at` para cruzar con las features del cliente).

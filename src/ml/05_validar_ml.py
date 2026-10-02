@@ -39,27 +39,43 @@ def value(sql):
 
 checks = []
 
-# Point-in-time: tres fotos repartidas en el historial (la primera con datos, la del medio, la última).
+# Las features son por persona: cada cuenta se mapea a su persona (cuenta principal).
+spark.sql(f"""
+CREATE OR REPLACE TEMP VIEW person AS
+SELECT c.customer_id, coalesce(d.principal_customer_id, c.customer_id) AS person_id, c.signup_date
+FROM {s}.customers c LEFT JOIN {s}.customer_duplicates d USING (customer_id)""")
+
+# Point-in-time: tres fotos repartidas en el historial. orders_lifetime debe ser igual a las compras
+# de TODAS las cuentas de la persona anteriores a la foto, fila por fila.
 snaps = [r[0] for r in spark.sql(f"SELECT DISTINCT as_of_ts FROM {ml}.customer_features ORDER BY 1").collect()]
 for snap in [snaps[len(snaps) // 4], snaps[len(snaps) // 2], snaps[-1]]:
     mismatches = value(f"""
-        SELECT count(*) FROM {ml}.customer_features f
-        LEFT JOIN (
-            SELECT f2.customer_id, count(o.order_id) AS n
-            FROM {ml}.customer_features f2
+        WITH real AS (
+            SELECT p.person_id, count(o.order_id) AS n
+            FROM person p
             LEFT JOIN {s}.orders o
-              ON o.customer_id = f2.customer_id
+              ON o.customer_id = p.customer_id
              AND o.status IN ('Pagado','Enviado','Entregado')
-             AND o.order_date < f2.as_of_ts
-            WHERE f2.as_of_ts = TIMESTAMP'{snap}'
-            GROUP BY f2.customer_id) real ON real.customer_id = f.customer_id
-        WHERE f.as_of_ts = TIMESTAMP'{snap}' AND f.orders_lifetime <> real.n""")
+             AND o.order_date < TIMESTAMP'{snap}'
+            GROUP BY p.person_id)
+        SELECT count(*) FROM {ml}.customer_features f
+        JOIN person p ON p.customer_id = f.customer_id
+        JOIN real r ON r.person_id = p.person_id
+        WHERE f.as_of_ts = TIMESTAMP'{snap}' AND f.orders_lifetime <> r.n""")
     checks.append((f"ml.point_in_time.{str(snap)[:10]}", 0, mismatches))
 
 checks += [
-    ("ml.fotos_antes_del_alta", 0, value(f"""
-        SELECT count(*) FROM {ml}.customer_features f JOIN {s}.customers c USING (customer_id)
-        WHERE to_date(f.as_of_ts) <= c.signup_date""")),
+    ("ml.fotos_antes_del_alta_de_la_persona", 0, value(f"""
+        WITH alta AS (SELECT person_id, min(signup_date) AS signup_date FROM person GROUP BY person_id)
+        SELECT count(*) FROM {ml}.customer_features f
+        JOIN person p ON p.customer_id = f.customer_id JOIN alta a ON a.person_id = p.person_id
+        WHERE to_date(f.as_of_ts) <= a.signup_date""")),
+    ("ml.cuentas_de_una_persona_con_features_distintas", 0, value(f"""
+        SELECT count(*) FROM (
+            SELECT p.person_id, f.as_of_ts FROM {ml}.customer_features f JOIN person p USING (customer_id)
+            WHERE f.as_of_ts = (SELECT max(as_of_ts) FROM {ml}.customer_features)
+            GROUP BY p.person_id, f.as_of_ts
+            HAVING count(DISTINCT f.orders_lifetime, f.net_sales_365d, f.tickets_90d) > 1)""")),
     ("ml.claves_unicas.customer_features", 0, value(
         f"SELECT count(*) - count(DISTINCT customer_id, as_of_ts) FROM {ml}.customer_features")),
     ("ml.claves_unicas.ticket_features", 0, value(

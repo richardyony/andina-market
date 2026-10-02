@@ -91,9 +91,20 @@ def champion_auc_on(test_labels):
 
 # COMMAND ----------
 
+# Observaciones por PERSONA, no por cuenta: alguien con dos cuentas aparece una sola vez (con su
+# cuenta principal, que en el feature store tiene las features de toda la persona) y su etiqueta
+# cuenta las compras de cualquiera de sus cuentas. Si no, pesaría doble en el entrenamiento.
+person = (
+    spark.table(f"{catalog}.silver.customers").select("customer_id")
+    .join(spark.table(f"{catalog}.silver.customer_duplicates").select("customer_id", "principal_customer_id"),
+          "customer_id", "left")
+    .select("customer_id", F.coalesce("principal_customer_id", "customer_id").alias("person_id"))
+)
 orders = (
     spark.table(f"{catalog}.silver.orders").where(F.col("status").isin(EFFECTIVE))
     .select("customer_id", F.col("order_date").alias("ts"))
+    .join(person, "customer_id")
+    .select(F.col("person_id").alias("customer_id"), "ts")
 )
 last_ts = orders.agg(F.max("ts")).first()[0]
 first_ts = orders.agg(F.min("ts")).first()[0]
@@ -103,7 +114,7 @@ obs_dates = spark.sql(f"""
         TIMESTAMP'{last_ts}' - INTERVAL {HORIZON_DAYS} DAYS,
         INTERVAL 1 MONTH)) AS obs_ts""")
 
-# Población: clientes con al menos una compra antes de la observación.
+# Población: personas (por su cuenta principal) con al menos una compra antes de la observación.
 population = obs_dates.join(orders, orders.ts < obs_dates.obs_ts).select("customer_id", "obs_ts").distinct()
 future = (
     population.join(orders, "customer_id")
