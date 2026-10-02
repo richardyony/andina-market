@@ -202,6 +202,10 @@ databricks bundle summary -t dev         # muestra la URL del dashboard
 
 La validación del job comprueba en cada corrida que los agregados cuadren con los hechos.
 
+![Dashboard de KPIs de Andina Market](docs/img/img1.jpg)
+
+Más capturas en [docs/kpis.md](docs/kpis.md).
+
 ## Cómo reproducir: feature store y modelos (nivel 4)
 
 Job `andina_ml` (serverless): tablas de features → entrenamiento de los dos modelos → puntuación batch. Guía completa para un ML engineer: [docs/feature_store.md](docs/feature_store.md).
@@ -232,6 +236,6 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Diagramas y diseños de streaming y SAP:** redactados con Claude. Las cifras del clickstream (duplicados, retrasos, anónimos) salen de analizar la muestra real; las decisiones y alternativas deben poder defenderse en la entrevista, así que conviene revisarlas.
 - **Transformación del nivel 2 (pipeline, reglas de calidad y modelo):** generados con Claude a partir del catálogo de casos borde. La validación contra los números esperados mostró tres reglas que había que afinar (duplicados, pedidos sin líneas y totales que no cuadran); el ajuste y su motivo están en D-14.
 - **Revisión de seguridad y robustez del nivel 2:** pedí a Claude una revisión crítica de lo construido. Encontró 10 debilidades (credenciales con privilegios de administrador, datos personales en gold, ejecución con usuario personal, una regla `drop` que podía inflar ventas, borrados perdidos en una recarga completa, entre otras). Decidí corregirlas, usar service principals también en dev y guardar las credenciales en Key Vault (D-14, D-17).
-- **KPIs y dashboard del nivel 3:** las definiciones, la capa agregada y el JSON del dashboard se generaron con Claude. Cada consulta del dashboard se ejecutó contra los datos para verificarla, y los valores se contrastaron con los parámetros del generador (ticket promedio, mezcla de canales, tasa de rechazo con tarjeta).
+- **KPIs y dashboard del nivel 3:** las definiciones, la capa agregada y el JSON del dashboard se generaron con Claude. Cada consulta del dashboard se ejecutó contra los datos para verificarla, y los valores se contrastaron con los parámetros del generador (ticket promedio, mezcla de canales, tasa de rechazo con tarjeta). Al revisar las capturas detecté que las primeras cohortes de recompra salían infladas por censura por la izquierda (clientes registrados antes del historial); se corrigió la definición (D-18).
 - **Feature store y modelos del nivel 4:** el diseño (fotos semanales point-in-time, exclusión del segmento por fuga del futuro, validación temporal, línea base) y el código se generaron con Claude. Las métricas son las de la corrida real; el point-in-time se verificó con una consulta independiente.
 - *(Se completa por nivel.)*

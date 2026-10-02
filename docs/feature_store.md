@@ -62,6 +62,8 @@ Clave primaria `ticket_id`. Campos: `subject`, `body`, `channel`, `body_length`,
 | **Frescura** | El job `andina_ml` recalcula las features a diario. Una foto semanal significa que, entre lunes, la foto vigente tiene hasta 6 días; es la contrapartida de no recalcular todo cada día |
 | **Idempotencia** | Las features se recalculan completas y se escriben con `merge` por clave primaria: repetir la corrida no cambia nada |
 
+**Límite conocido: `orders_lifetime` cuenta desde el inicio del historial** (octubre de 2024), no desde el alta. Para los 1.846 clientes registrados antes, subestima su historia real; `tenure_days` sí es exacta. Es la misma censura por la izquierda corregida en el KPI de recompra (D-18); para el modelo es aceptable porque las features de 90 y 365 días pesan más.
+
 **Una feature que se excluyó a propósito: el segmento del CRM.** Su historial existe solo desde la primera ingesta (D-05). Para observaciones anteriores habría que usar el segmento de hoy, que el CRM calcula con compras posteriores: eso es fuga del futuro y el modelo parecería mejor de lo que es.
 
 ## 4. Cómo pedir features (entrenamiento)

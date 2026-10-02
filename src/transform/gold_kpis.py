@@ -57,21 +57,35 @@ def agg_sales_monthly():
     name="gold.agg_repurchase_cohorts",
     comment=f"Cohorte = mes de la primera compra efectiva de la persona. Recompra = otra compra "
             f"efectiva dentro de {REPURCHASE_DAYS} días. Se cuenta por persona (principal_customer_id), "
-            "no por cuenta: las cuentas duplicadas no inflan las cohortes. is_complete = false si "
+            "no por cuenta: las cuentas duplicadas no inflan las cohortes. Solo personas registradas "
+            "desde el inicio del historial (de las anteriores no se conoce su primera compra). is_complete = false si "
             f"aún no pasaron {REPURCHASE_DAYS} días desde el fin del mes (la tasa todavía puede subir).",
 )
 def agg_repurchase_cohorts():
     o = read("gold.fact_orders").where(F.col("order_status").isin(EFFECTIVE))
-    person = read("gold.dim_customer").select("customer_key", "principal_customer_id", "country")
+    dim = read("gold.dim_customer")
+    person = dim.select("customer_key", "principal_customer_id", "country")
     orders = (
         o.join(person, "customer_key")
         .select("principal_customer_id", "country",
                 F.to_date(F.col("date_key").cast("string"), "yyyyMMdd").alias("order_date"))
     )
+    # Censura por la izquierda: el historial empieza en la primera compra registrada. De quien se
+    # registró antes, no se sabe cuál fue su primera compra real: la "primera" que vemos puede ser
+    # la décima. Solo entran a una cohorte las personas registradas desde el inicio del historial.
+    history_start = orders.agg(F.min("order_date").alias("history_start"))
+    principal_signup = (
+        dim.where("is_current AND customer_id = principal_customer_id")
+        .select("principal_customer_id", "signup_date")
+    )
     w = Window.partitionBy("principal_customer_id").orderBy("order_date")
     ranked = orders.withColumn("n", F.row_number().over(w))
-    first = ranked.where("n = 1").select(
-        "principal_customer_id", "country", F.col("order_date").alias("first_date")
+    first = (
+        ranked.where("n = 1")
+        .join(principal_signup, "principal_customer_id")
+        .crossJoin(history_start)
+        .where(F.col("signup_date") >= F.col("history_start"))
+        .select("principal_customer_id", "country", F.col("order_date").alias("first_date"))
     )
     later = ranked.where("n > 1").select("principal_customer_id", F.col("order_date").alias("next_date"))
     repurchased = (

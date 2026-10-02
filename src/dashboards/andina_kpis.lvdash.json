@@ -34,7 +34,7 @@
       "name": "ds_recompra",
       "displayName": "Recompra a 90 días por cohorte",
       "queryLines": [
-        "SELECT to_date(concat(cohort_month, '-01')) AS cohorte, round(sum(repurchased_90d) / sum(new_customers) * 100, 1) AS tasa_recompra, sum(new_customers) AS clientes_nuevos FROM agg_repurchase_cohorts WHERE is_complete GROUP BY cohort_month"
+        "SELECT to_date(concat(cohort_month, '-01')) AS cohorte, round(sum(repurchased_90d) / sum(new_customers) * 100, 1) AS tasa_recompra, sum(new_customers) AS clientes_nuevos FROM agg_repurchase_cohorts WHERE is_complete GROUP BY cohort_month HAVING sum(new_customers) >= 30"
       ]
     },
     {
@@ -63,6 +63,7 @@
             "multilineTextboxSpec": {
               "lines": [
                 "## Andina Market · Indicadores clave",
+                "",
                 "Ventas, retención, cobros y devoluciones. Las tarjetas resumen los **últimos 12 meses**. Fuente: tablas `agg_*` de la capa gold (definiciones en `docs/kpis.md`)."
               ]
             }
@@ -189,7 +190,7 @@
                 "showTitle": true,
                 "title": "Recompra a 90 días (%)",
                 "showDescription": true,
-                "description": "Clientes nuevos que vuelven a comprar en 90 días (cohortes completas)."
+                "description": "Clientes nuevos que recompran en 90 días."
               }
             }
           },
@@ -273,7 +274,7 @@
                 "showTitle": true,
                 "title": "Dobles cobros sin devolver",
                 "showDescription": true,
-                "description": "Cobros duplicados que siguen aprobados (todo el histórico)."
+                "description": "Duplicados aún aprobados (histórico)."
               }
             }
           },
@@ -495,7 +496,7 @@
                 "showTitle": true,
                 "title": "Recompra a 90 días por cohorte",
                 "showDescription": true,
-                "description": "Solo cohortes completas (pasaron 90 días desde su último día)."
+                "description": "Clientes nuevos, cohortes completas de al menos 30 personas."
               }
             }
           },

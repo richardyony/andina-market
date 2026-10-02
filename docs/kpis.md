@@ -22,7 +22,7 @@ Cada KPI tiene **una sola definición**, escrita en código en `src/transform/go
 |---|---|---|---|
 | **Ventas netas** | Suma del total cobrado de pedidos *Pagados*, *Enviados* o *Entregados* (sin cancelados, devueltos ni pendientes) | `agg_sales_monthly`: mes × país × canal × segmento | Tamaño y tendencia del negocio; el desglose por canal muestra el avance de la app |
 | **Ticket promedio** | Ventas netas / pedidos | `agg_sales_monthly` | Separa crecimiento por más pedidos de crecimiento por pedidos más grandes |
-| **Recompra a 90 días** | Personas que vuelven a comprar dentro de 90 días de su primera compra / personas nuevas de la cohorte | `agg_repurchase_cohorts`: mes de la primera compra × país | Retención; es la variable objetivo del modelo de propensión del nivel 4 |
+| **Recompra a 90 días** | Personas nuevas que vuelven a comprar dentro de 90 días de su primera compra / personas nuevas de la cohorte | `agg_repurchase_cohorts`: mes de la primera compra × país | Retención; es la variable objetivo del modelo de propensión del nivel 4 |
 | **Aprobación de pagos** | Pagos aprobados (o luego reembolsados) / (aprobados + rechazados) | `agg_payments_monthly`: mes × canal × método | Cada rechazo es una venta en riesgo; por método muestra dónde está la fricción |
 | **Dobles cobros sin devolver** | Cantidad y monto de cobros duplicados que siguen aprobados | `agg_payments_monthly` | Dinero que hay que devolver al cliente; genera tickets urgentes y daño reputacional |
 | **Tasa de devolución** | Unidades de pedidos devueltos / unidades vendidas (incluye las devueltas) | `agg_returns_monthly`: mes × categoría | Calidad del catálogo y costo logístico |
@@ -32,6 +32,7 @@ Cada KPI tiene **una sola definición**, escrita en código en `src/transform/go
 - **El segmento es el de la fecha del pedido**, no el actual: `agg_sales_monthly` toma el segmento de `dim_customer` vigente en ese momento (SCD2). Las ventas de un cliente que hoy es VIP pero compró como *Nuevo* cuentan como *Nuevo*.
 - **La recompra se cuenta por persona, no por cuenta:** usa `principal_customer_id`, así las 57 cuentas duplicadas no inflan las cohortes. Es la calidad de datos de silver usada en un KPI.
 - **Cohortes incompletas:** si no pasaron 90 días desde el fin del mes de la cohorte, la tasa todavía puede subir. `is_complete` las marca y el dashboard solo muestra las completas.
+- **Censura por la izquierda (corregida al revisar las capturas):** el historial empieza en octubre de 2024, pero 1.846 clientes se registraron antes (desde 2022). Para ellos, la "primera compra" que vemos no es la primera real, y las primeras cohortes salían infladas (75-80 %, con clientes de ~500 días de antigüedad). Ahora solo entran a una cohorte las personas registradas desde el inicio del historial, y el gráfico muestra cohortes de al menos 30 personas para no leer ruido.
 - **Venta neta usa el total cobrado del pedido**, no la suma de las líneas: incluye los descuentos aplicados en la cabecera (D-14).
 - **Las líneas de productos desconocidos** (cuarentena) aparecen en la categoría *Desconocida*; caen fuera de la ventana de 12 meses del dashboard porque son de 2024.
 
@@ -51,10 +52,20 @@ Valores al 1 de octubre de 2026 (dev, datos sintéticos):
 |---|---|
 | Ventas netas, últimos 12 meses | 2.076.200 USD |
 | Ticket promedio | 123,21 USD |
-| Recompra a 90 días (cohortes completas del último año) | 52,6 % |
+| Recompra a 90 días (clientes nuevos, cohortes completas del último año) | 54,3 % |
 | Aprobación de pagos | 90,8 % (tarjeta 88,5 %, efectivo 97,5 %) |
 | Dobles cobros sin devolver | 69 cobros, 7.269 USD |
 | Tasa de devolución | ~3,3 % en todas las categorías |
+
+### Capturas
+
+![Tarjetas de KPIs](img/img1.jpg)
+
+![Ventas netas mensuales por canal](img/img2.jpg)
+
+![Ventas por país y recompra por cohorte](img/img3.jpg)
+
+![Aprobación de pagos por método y devoluciones por categoría](img/img4.jpg)
 
 **Cómo verlo:** en Databricks, **Dashboards → [dev rhuaman] Andina Market · KPIs (dev)**, o con `databricks bundle summary`, que muestra la URL. Cada lector consulta con sus propios permisos de Unity Catalog (`embed_credentials: false`): necesita `SELECT` sobre `gold`.
 
