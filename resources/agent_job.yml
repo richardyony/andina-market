@@ -1,0 +1,21 @@
+# Nivel 6: herramientas del agente (funciones de Unity Catalog) y ejemplos de interacción.
+# Requiere el índice del nivel 5 (job andina_rag) para la herramienta search_policies.
+resources:
+  jobs:
+    andina_agent:
+      name: andina_agent_${bundle.target}
+      description: Crea las herramientas del agente en Unity Catalog y ejecuta los escenarios de prueba.
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+      tasks:
+        - task_key: crear_herramientas
+          notebook_task:
+            notebook_path: ../src/agent/01_crear_herramientas.py
+          timeout_seconds: 1800
+        - task_key: demo_agente
+          depends_on: [{task_key: crear_herramientas}]
+          notebook_task:
+            notebook_path: ../src/agent/02_demo_agente.py
+          timeout_seconds: 3600

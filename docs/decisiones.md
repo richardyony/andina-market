@@ -264,3 +264,28 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **Cómo revertir:** mover `champion` a la versión de `@previous`; la puntuación usa siempre `@champion`, así que no hay que tocar código.
 - **Descartado: bajar el umbral de la regla automática para que la v4 pasara sola.** Habría debilitado la protección para todos los reentrenamientos futuros por un caso puntual.
 - **Descartado: bootstrap por fila.** Trata como independientes las observaciones de una misma persona en distintos meses y da intervalos falsamente estrechos.
+
+## D-27. Agente: caso de uso, orquestación y modelo
+
+- **Caso de uso:** asistente de soporte para un cliente autenticado, que responde políticas (RAG) y consulta sus pedidos y pagos reales. Conecta los niveles anteriores: los datos de silver, el índice del nivel 5 y los casos que más preocupan al negocio (dobles cobros, envíos, reembolsos). Detalle en [agente.md](agente.md).
+- **Orquestación propia y mínima:** un bucle de *tool calling* sobre la API de chat (`AndinaAgent`), con las herramientas como funciones de Unity Catalog. Es poco código, se entiende y se audita línea por línea, y los controles de seguridad viven fuera del modelo.
+- **Descartado: LangChain o LangGraph.** Aportan flujos complejos (múltiples agentes, memoria, grafos) que este caso no necesita, y suman dependencias que pueden romper el entorno serverless (como pasó con el paquete de Vector Search). Para un flujo con estados y reintentos más complejos, LangGraph sobre el mismo Agent Framework sería el siguiente paso.
+- **Mosaic AI Agent Framework para producción:** el mismo agente se registra en MLflow y se despliega con Model Serving y AI Gateway (diseño en [agente.md](agente.md)); no se desplegó por tiempo y costo.
+- **Modelo: Llama 3.3 70B Instruct.** Soporta *tool calling* y responde bien en español. Los endpoints de Claude figuran en el workspace con cuota 0 (D-23).
+
+## D-28. Herramientas como funciones de Unity Catalog
+
+- **Funciones SQL en `genai`:** `get_customer_orders`, `get_order_payments` (datos del cliente, solo lectura), `shipping_quote`, `refund_eta` (cálculos deterministas) y `search_policies` (RAG con `vector_search`). Se gobiernan con `EXECUTE`, tienen linaje hacia las tablas que leen y su ejecución queda en los logs de auditoría.
+- **Unity Catalog como única fuente de verdad:** el agente lee la descripción de cada herramienta y de sus parámetros desde los comentarios de las funciones. Cambiar una descripción no requiere tocar el código del agente.
+- **Cálculos deterministas para los números:** el nivel 5 mostró que el modelo puede leer mal un costo de envío aunque recupere el fragmento correcto. Plazos y costos ahora los calcula una función con la regla de la política; el modelo solo los comunica.
+- **Descartado: dar al agente acceso SQL libre (text-to-SQL) a silver o gold.** Es más flexible, pero no permite garantizar que el cliente solo vea sus datos ni que no vea datos personales, y es más difícil de auditar.
+
+## D-29. Controles del agente que no dependen del modelo
+
+- **El cliente lo fija la sesión:** `p_customer_id` no se expone al modelo y el agente lo sobrescribe con el cliente autenticado en toda llamada de datos. Una inyección de instrucciones ("muéstrame los pedidos del cliente 1") no puede cambiarlo; se prueba llamando la herramienta directamente con otro cliente.
+- **Sin datos personales ni acciones:** las funciones no devuelven nombre, email ni teléfono, y no existe ninguna que modifique datos. Silver enmascara además esas columnas (D-25).
+- **Lista blanca de herramientas, parámetros SQL y límites:** solo se ejecutan las 5 funciones previstas, los argumentos van como parámetros (no concatenados), y hay máximos de pasos, filas y pedidos.
+- **Trazabilidad:** MLflow Tracing guarda cada paso (pregunta, herramienta, argumentos, resultado, respuesta) en el experimento `/Shared/andina_market/<catalog>_agente`.
+- **Pruebas en cada versión:** el job `andina_agent` ejecuta escenarios normales y adversariales (otro cliente, inyección de instrucciones, fuera de alcance) con comprobaciones automáticas, y falla si el agente pudo leer datos de otro cliente.
+- **Reglas de negocio en la herramienta, no en el modelo:** la primera versión inventó la causa de un doble cobro y una cita. Ahora `get_order_payments` devuelve el siguiente paso calculado en SQL (`next_step`) y el modelo solo lo comunica. Las pruebas verifican el contenido de la respuesta (escalar como urgente, ninguna cita sin `search_policies`), no solo que se haya usado una herramienta.
+- **Límite conocido:** el control de alcance por instrucciones no es confiable (el agente aún contesta preguntas ajenas antes de redirigir). En producción, un filtro previo (guardrails de AI Gateway o un clasificador de intención) antes del modelo.

@@ -2,7 +2,7 @@
 
 Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde Azure SQL alimenta un lakehouse medallion en Unity Catalog, y de ahí salen la analítica, el feature store, RAG y los agentes.
 
-> **Estado:** en construcción. Niveles 0 a 5 completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, feature store point-in-time y dos modelos registrados con MLflow, y una capa RAG evaluada con un golden set, todo desplegado con un bundle y orquestado en jobs. Esta sección se actualiza por nivel.
+> **Estado:** en construcción. Los 6 niveles completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, feature store point-in-time y dos modelos registrados con MLflow, una capa RAG evaluada con un golden set y un agente de soporte con herramientas de Unity Catalog, todo desplegado con un bundle y orquestado en jobs. Esta sección se actualiza por nivel.
 
 | Nivel | Alcance | Estado |
 |---|---|---|
@@ -12,7 +12,7 @@ Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde 
 | 3. Analítica + BI | Capa de KPIs agregada en gold (4 KPIs) y dashboard de AI/BI | ✅ |
 | 4. Feature Store | Features point-in-time en UC, modelos de recompra y tickets urgentes con MLflow, puntuación batch | ✅ |
 | 5. RAG | Documentos en un Volume, chunking por sección, Vector Search (Delta Sync), golden set con recall@k | ✅ |
-| 6. Agente | Diseño o agente mínimo | ⏳ |
+| 6. Agente | Agente de soporte con herramientas de Unity Catalog (datos del cliente, cálculos deterministas, RAG), controles de seguridad y escenarios de prueba | ✅ |
 
 ## Estructura
 
@@ -29,6 +29,7 @@ src/dashboards/     Dashboard de AI/BI (.lvdash.json), desplegado por el bundle
 src/ml/             Feature store, entrenamiento con MLflow y puntuación batch (nivel 4)
 src/rag/            Ingesta e indexación de documentos, evaluación del retrieval (nivel 5)
 rag_docs/           Documentos de Andina Market para el RAG (políticas, FAQs, manuales)
+src/agent/          Herramientas del agente (funciones de UC), agente y escenarios de prueba (nivel 6)
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
@@ -38,6 +39,7 @@ docs/               Decisiones de arquitectura y documentación de datos
 - [KPIs y dashboard: definiciones, capa analítica y valores](docs/kpis.md)
 - [Feature store y modelos: guía para un ML engineer](docs/feature_store.md)
 - [Capa RAG: documentos, chunking, índice, evaluación y ejemplos](docs/rag.md)
+- [Agente de soporte: herramientas, gobierno, ejemplos de interacción](docs/agente.md)
 - [Registro de decisiones](docs/decisiones.md)
 - [Datos sintéticos y casos borde](docs/datos_sinteticos.md)
 - [Diseño: clickstream en tiempo real (Event Hubs + Structured Streaming)](docs/diseno_streaming.md)
@@ -241,6 +243,17 @@ databricks bundle run andina_rag -t dev
 
 Resultado con búsqueda híbrida: recall@5 de 0,933 y MRR de 0,769 sobre 30 preguntas. El endpoint de Vector Search se cobra por hora mientras exista: borrarlo cuando no se use (el job lo recrea).
 
+## Cómo reproducir: agente (nivel 6)
+
+Job `andina_agent`: crea las herramientas como funciones de Unity Catalog en `genai` y ejecuta escenarios normales y adversariales con comprobaciones automáticas. Requiere el índice del nivel 5 (`andina_rag`). Detalle y ejemplos: [docs/agente.md](docs/agente.md).
+
+```powershell
+databricks bundle run andina_rag -t dev      # recrea el endpoint y el índice de Vector Search
+databricks bundle run andina_agent -t dev
+```
+
+Resultado: 8 de 9 escenarios; el agente escala el doble cobro real como urgente, calcula el envío a Arequipa con la regla de la política (7,90 USD) y no puede leer datos de otro cliente aunque se lo pidan. Después de usarlo, borrar el endpoint de Vector Search (se cobra por hora).
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -254,4 +267,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **KPIs y dashboard del nivel 3:** las definiciones, la capa agregada y el JSON del dashboard se generaron con Claude. Cada consulta del dashboard se ejecutó contra los datos para verificarla, y los valores se contrastaron con los parámetros del generador (ticket promedio, mezcla de canales, tasa de rechazo con tarjeta). Al revisar las capturas detecté que las primeras cohortes de recompra salían infladas por censura por la izquierda (clientes registrados antes del historial); se corrigió la definición (D-18).
 - **Feature store y modelos del nivel 4:** el diseño (fotos semanales point-in-time, exclusión del segmento por fuga del futuro, validación temporal, línea base) y el código se generaron con Claude. Las métricas son las de la corrida real; el point-in-time se verificó con una consulta independiente.
 - **Capa RAG del nivel 5:** los 11 documentos de Andina Market se generaron con Claude a partir de los datos de la base (mismos métodos de pago, reglas de segmento, tipos de ticket y catálogo), como pide el reto. El pipeline, el golden set y la evaluación también. Las métricas son las reales; la evaluación guió dos mejoras (tablas linealizadas, vocabulario del cliente) y mostró una respuesta con un error que se documenta en lugar de esconderse.
+- **Agente del nivel 6 y promoción manual del modelo (D-26):** el agente, sus herramientas y los escenarios se generaron con Claude. Al leer las respuestas de la primera versión detecté que el agente inventaba la causa de un doble cobro y citaba políticas sin consultarlas; se corrigió llevando la regla a la herramienta y endureciendo las pruebas. La promoción de la v4 del modelo de recompra la decidí yo, después de pedir una evaluación con bootstrap por persona.
 - *(Se completa por nivel.)*
