@@ -26,7 +26,7 @@ flowchart LR
     M2 -.-> ON
 ```
 
-Todo corre en el job `andina_ml` (serverless, con el service principal del entorno): **features → entrenar los dos modelos en paralelo → puntuar**. Código en `src/ml/`.
+Todo corre en el job `andina_ml` (serverless, con el service principal del entorno): **features → entrenar los dos modelos en paralelo → puntuar → validar**. Código en `src/ml/`.
 
 ## 2. Catálogo de features
 
@@ -113,7 +113,7 @@ No se desplegó porque una tabla online y un endpoint cuestan mientras están en
 
 Evaluación temporal: se entrena con el pasado y se evalúa con meses posteriores. Cada corrida queda en el experimento de MLflow `/Shared/andina_market/<catalog>_*`. Resultados al 1 de octubre de 2026 (dev):
 
-### Propensión de recompra: `ml.repurchase_propensity@champion` (v2)
+### Propensión de recompra: `ml.repurchase_propensity@champion` (v2; la v3 quedó como challenger)
 
 | Métrica | Valor |
 |---|---|
@@ -125,7 +125,7 @@ Evaluación temporal: se entrena con el pasado y se evalúa con meses posteriore
 
 **Lectura:** el modelo supera a la regla simple, pero la recencia sola ya explica buena parte. Es lo esperado en recompra, y vale decirlo así: la mejora viene de combinar recencia con frecuencia, valor y fricción (tickets, rechazos).
 
-### Tickets urgentes: `ml.urgent_ticket_classifier@champion` (v2)
+### Tickets urgentes: `ml.urgent_ticket_classifier@champion` (v3, mismas métricas que la v2)
 
 | Métrica | Valor |
 |---|---|
@@ -137,9 +137,13 @@ Evaluación temporal: se entrena con el pasado y se evalúa con meses posteriore
 
 **Lectura:** con un 8 % de ruido en las etiquetas de origen, un modelo perfecto no es posible. El umbral se elige según la capacidad del equipo de soporte: bajarlo encuentra más urgentes a cambio de más falsos positivos.
 
+### Promoción con control
+
+Cada entrenamiento registra la versión nueva como `challenger`; pasa a `champion` solo si iguala o supera al champion actual en el mismo conjunto de prueba. En la primera corrida con la regla, la v3 de recompra (AUC 0,8204) quedó como challenger porque el champion v2 obtuvo 0,8222 en esos mismos datos; la v3 de tickets urgentes empató y se promovió.
+
 ### Verificación de point-in-time
 
-Se comprobó con SQL independiente del código de las features: en las fotos del 2 de junio de 2025 y del 2 de marzo de 2026, las 6.310 filas tienen `orders_lifetime` igual al número de compras **anteriores** a la fecha de la foto. Ninguna ve el futuro.
+Se comprueba en cada corrida del job con SQL independiente del código de las features (`src/ml/05_validar_ml.py`). En la primera revisión manual: en las fotos del 2 de junio de 2025 y del 2 de marzo de 2026, las 6.310 filas tienen `orders_lifetime` igual al número de compras **anteriores** a la fecha de la foto. Ninguna ve el futuro.
 
 ### Puntuación
 

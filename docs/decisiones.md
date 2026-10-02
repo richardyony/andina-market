@@ -198,6 +198,9 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **Línea base:** el modelo de recompra se compara con una regla sin modelo (ordenar por recencia). Si no la supera claramente, el modelo no aporta.
 - **La probabilidad, no la clase:** los modelos se registran como `pyfunc` que devuelve la probabilidad. Para ordenar clientes o una cola de tickets se necesita el puntaje; el umbral lo decide el negocio según su capacidad (cupones, agentes).
 - **Registro en Unity Catalog** (`ml.repurchase_propensity`, `ml.urgent_ticket_classifier`) con el alias `champion`. La puntuación siempre usa `@champion`; promover una versión nueva es mover el alias, sin cambiar código. Cada versión queda ligada a su corrida de MLflow (parámetros, métricas) y a las tablas de features con las que se entrenó.
+- **Promoción con control (`challenger` → `champion`):** cada versión nueva queda como `challenger`. Solo pasa a `champion` si su ROC AUC iguala o supera al del champion actual **evaluado en el mismo conjunto de prueba** (con `score_batch`, que busca las features con la misma lógica point-in-time). Comparar contra las métricas guardadas del champion no sirve, porque se midieron con otro periodo. Primera corrida con la regla: la v3 de recompra (0,8204) no superó a la v2 (0,8222) y no se promovió; la v3 de tickets empató (0,8541) y sí.
+- **Descartado: promover siempre la última versión.** Era el comportamiento inicial: un reentrenamiento peor habría reemplazado al modelo en uso sin que nadie lo notara.
+- **Validación de ML en cada corrida** (`src/ml/05_validar_ml.py`): point-in-time fila por fila en tres fotos, ninguna foto antes del alta, claves únicas, frescura, alias `champion` presentes, champion de recompra mejor que la línea base, puntajes válidos y completos. Falla el job si algo no cuadra.
 
 ## D-21. Puntuación y servicio
 

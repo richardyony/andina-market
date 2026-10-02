@@ -14,6 +14,9 @@
 # MAGIC     **antes** del ticket (pedidos, tickets y pagos rechazados recientes). La foto es anterior al
 # MAGIC     ticket, así que no incluye el ticket mismo.
 # MAGIC - **Validación temporal:** el 20 % más reciente de los tickets es el conjunto de prueba.
+# MAGIC - **Promoción con control:** cada versión nueva queda con el alias `challenger`; solo pasa a
+# MAGIC   `champion` si su ROC AUC iguala o supera al del champion actual evaluado en el **mismo**
+# MAGIC   conjunto de prueba (con `score_batch`). Un reentrenamiento peor nunca reemplaza al modelo en uso.
 
 # COMMAND ----------
 
@@ -63,6 +66,18 @@ class ProbabilityModel(mlflow.pyfunc.PythonModel):
             if pd.api.types.is_numeric_dtype(df[col]) or pd.api.types.is_bool_dtype(df[col]):
                 df[col] = df[col].astype("float64")
         return self.model.predict_proba(df)[:, 1]
+
+
+def champion_auc_on(test_labels):
+    """ROC AUC del champion actual sobre los tickets de prueba (None si aún no hay champion)."""
+    client = MlflowClient()
+    try:
+        client.get_model_version_by_alias(MODEL_NAME, "champion")
+    except Exception:  # noqa: BLE001 - primer entrenamiento: no hay champion
+        return None
+    scored = fe.score_batch(model_uri=f"models:/{MODEL_NAME}@champion", df=test_labels)
+    pdf = scored.select("label", "prediction").toPandas()
+    return float(roc_auc_score(pdf["label"], pdf["prediction"]))
 
 # COMMAND ----------
 
@@ -128,7 +143,18 @@ with mlflow.start_run(run_name="tfidf_logreg_urgent"):
     )
     print({k: round(v, 4) if isinstance(v, float) else v for k, v in metrics.items()})
 
+    # --- Promoción con control: el champion actual se evalúa en los MISMOS tickets de prueba.
+    test_ids = spark.createDataFrame(test[["ticket_id"]].astype("int32"))
+    champion_auc = champion_auc_on(labels.join(test_ids, "ticket_id"))
+    promoted = champion_auc is None or metrics["test_roc_auc"] >= champion_auc
+    mlflow.log_metric("champion_roc_auc_same_test", champion_auc if champion_auc is not None else float("nan"))
+    mlflow.log_param("promoted_to_champion", promoted)
+
 client = MlflowClient()
 version = max(int(v.version) for v in client.search_model_versions(f"name='{MODEL_NAME}'"))
-client.set_registered_model_alias(MODEL_NAME, "champion", version)
-print(f"{MODEL_NAME} v{version} → alias champion")
+client.set_registered_model_alias(MODEL_NAME, "challenger", version)
+if promoted:
+    client.set_registered_model_alias(MODEL_NAME, "champion", version)
+    print(f"{MODEL_NAME} v{version} → champion (AUC {metrics['test_roc_auc']:.4f} vs champion anterior {champion_auc})")
+else:
+    print(f"{MODEL_NAME} v{version} queda como challenger: AUC {metrics['test_roc_auc']:.4f} < champion {champion_auc:.4f}")

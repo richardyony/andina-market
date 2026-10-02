@@ -37,3 +37,11 @@ resources:
           notebook_task:
             notebook_path: ../src/ml/04_score_batch.py
           timeout_seconds: 3600
+        - task_key: validar_ml
+          description: Point-in-time, claves, frescura, champion y puntajes; falla si algo no cuadra
+          depends_on: [{task_key: score_batch}]
+          notebook_task:
+            notebook_path: ../src/ml/05_validar_ml.py
+            base_parameters:
+              batch_id: "{{job.run_id}}"
+          timeout_seconds: 1800

@@ -62,9 +62,9 @@
             "name": "titulo",
             "multilineTextboxSpec": {
               "lines": [
-                "## Andina Market · Indicadores clave",
-                "",
-                "Ventas, retención, cobros y devoluciones. Las tarjetas resumen los **últimos 12 meses**. Fuente: tablas `agg_*` de la capa gold (definiciones en `docs/kpis.md`)."
+                "## Andina Market · Indicadores clave\n",
+                "\n",
+                "Ventas, retención, cobros y devoluciones. Las tarjetas resumen los **últimos 12 meses**. Fuente: tablas `agg_*` de la capa gold (definiciones en `docs/kpis.md`).\n"
               ]
             }
           },
