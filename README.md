@@ -195,7 +195,7 @@ Después de la revisión de seguridad y robustez (D-14, D-17), el entorno dev se
 - **Línea que pasa a cantidad 0:** sale de silver y las ventas bajan exactamente su importe (38,70 USD).
 - **Doble cobro reembolsado:** sigue detectado, con su estado actual "Reembolsado".
 - **Borrado durante una recarga completa:** genera el DELETE sintético y el ticket desaparece de silver.
-- **Job completo sin cambios en la fuente:** todas las tablas quedan idénticas, y las 21 validaciones de `ops.validation_log` pasan en cada corrida.
+- **Job completo sin cambios en la fuente:** todas las tablas quedan idénticas, y todas las validaciones de `ops.validation_log` pasan en cada corrida (hoy son 24).
 
 ## Cómo reproducir: KPIs y dashboard (nivel 3)
 
