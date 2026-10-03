@@ -9,8 +9,9 @@ from pyspark import pipelines as dp
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
+from reglas import DOUBLE_CHARGE_WINDOW_S, double_charges, email_problem
+
 CATALOG = spark.conf.get("andina.catalog")  # noqa: F821 - `spark` lo inyecta el pipeline
-DOUBLE_CHARGE_WINDOW_S = 60  # dos aprobaciones del mismo monto en menos de un minuto = doble clic
 
 # Columnas de la fuente que cada vista *_changes lleva a silver. Si bronze trae una columna que no
 # está aquí (cambio de esquema en la fuente), se reporta en silver.unmapped_source_columns.
@@ -76,23 +77,7 @@ def payment_double_charges():
     current = read("silver.payments").select(
         "payment_id", "method", F.col("status").alias("current_status")
     )
-    w = Window.partitionBy("order_id", "amount").orderBy("created_at", "payment_id")
-    return (
-        approved.join(current, "payment_id")
-        .select(
-            "order_id", "amount", "method",
-            F.col("payment_id").alias("duplicate_payment_id"),
-            F.col("created_at").alias("duplicate_created_at"),
-            F.col("current_status").alias("duplicate_current_status"),
-            F.lag("payment_id").over(w).alias("original_payment_id"),
-            F.lag("created_at").over(w).alias("original_created_at"),
-        )
-        .withColumn(
-            "seconds_apart",
-            F.col("duplicate_created_at").cast("long") - F.col("original_created_at").cast("long"),
-        )
-        .where(f"original_payment_id IS NOT NULL AND seconds_apart <= {DOUBLE_CHARGE_WINDOW_S}")
-    )
+    return double_charges(approved, current)
 
 
 # ---------------------------------------------------------------------------
@@ -122,16 +107,6 @@ def issue(df, rule: str, action: str, entity: str, id_col: str, detail):
         F.lit(entity).alias("entity"),
         F.col(id_col).cast("string").alias("entity_id"),
         detail.cast("string").alias("detail"),
-    )
-
-
-def email_problem(col):
-    """Describe por qué un email es inválido sin copiar el email (dato personal)."""
-    return (
-        F.when(~col.contains("@"), F.lit("sin @"))
-         .when(col.contains("@@"), F.lit("@ repetida"))
-         .when(col.rlike(r"@[^.]+$"), F.lit("dominio sin extensión"))
-         .otherwise(F.lit("otro formato"))
     )
 
 

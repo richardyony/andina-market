@@ -6,6 +6,8 @@ y AUTO CDC hacia el estado actual, ordenado por `_ct_version` y aplicando los DE
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
+from reglas import ITEM_REMOVED_SQL, order_date_clean, order_date_corrected
+
 CATALOG = spark.conf.get("andina.catalog")  # noqa: F821 - `spark` lo inyecta el pipeline
 LINEAGE = ["_ct_version", "_ct_operation", "_batch_id", "_ingested_at"]
 
@@ -65,7 +67,6 @@ def orders_changes():
     df = spark.readStream.table(f"{CATALOG}.bronze.orders")  # noqa: F821
     # Un OrderDate más de un día posterior a la creación del registro es un error de captura
     # (año mal digitado): se usa CreatedAt, que pone la base y es confiable. Se conserva el original.
-    corrected = F.col("OrderDate") > F.col("CreatedAt") + F.expr("INTERVAL 1 DAY")
     # CouponCode llegó con un cambio de esquema: si la columna aún no existe (p. ej. en un
     # entorno sin ese cambio), el pipeline sigue funcionando con NULL.
     coupon = F.col("CouponCode") if "CouponCode" in df.columns else F.lit(None).cast("string")
@@ -73,8 +74,8 @@ def orders_changes():
         F.col("OrderId").alias("order_id"),
         F.col("CustomerId").alias("customer_id"),
         F.col("OrderDate").alias("order_date_raw"),
-        F.when(corrected, F.col("CreatedAt")).otherwise(F.col("OrderDate")).alias("order_date"),
-        F.coalesce(corrected, F.lit(False)).alias("order_date_corrected"),
+        order_date_clean(F.col("OrderDate"), F.col("CreatedAt")).alias("order_date"),
+        order_date_corrected(F.col("OrderDate"), F.col("CreatedAt")).alias("order_date_corrected"),
         F.lower(F.trim("Channel")).alias("channel"),
         F.col("Status").alias("status"),
         F.col("TotalAmount").alias("total_amount"),
@@ -118,7 +119,7 @@ def order_items_changes():
 scd1("silver.order_items", "order_items_changes", "order_item_id",
      "Líneas de pedido, estado actual (SCD1). Sin cantidades 0 (ver silver.rejected_order_items). "
      "Los ProductId huérfanos se conservan y se listan en silver.quarantine_order_items.",
-     delete_when="_ct_operation = 'D' OR quantity <= 0")
+     delete_when=ITEM_REMOVED_SQL)
 
 
 @dp.table(

@@ -7,6 +7,8 @@ Tickets: estado actual (SCD1); los DELETE de la fuente (spam) se aplican.
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
+from reglas import body_clean
+
 CATALOG = spark.conf.get("andina.catalog")  # noqa: F821 - `spark` lo inyecta el pipeline
 LINEAGE = ["_ct_version", "_ct_operation", "_batch_id", "_ingested_at"]
 
@@ -79,7 +81,7 @@ def support_tickets_changes():
         F.lower(F.trim("Channel")).alias("channel"),
         F.trim("Subject").alias("subject"),
         # '' y solo espacios son "sin cuerpo": se normalizan a NULL.
-        F.nullif(F.trim("Body"), F.lit("")).alias("body"),
+        body_clean(F.col("Body")).alias("body"),
         F.col("Priority").alias("priority"),
         F.col("Status").alias("status"),
         F.col("CreatedAt").alias("created_at"),

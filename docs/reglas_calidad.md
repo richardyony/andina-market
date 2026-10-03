@@ -14,6 +14,8 @@ Catálogo completo de lo que el pipeline hace con cada dato entre bronze y gold.
 
 Las métricas de cada expectation se ven en la interfaz del pipeline (pestaña **Data quality** de cada tabla). `silver.data_quality_issues` dice además cuál registro y por qué, sin copiar datos personales.
 
+**Dónde está el código y cómo se prueba:** las reglas de las secciones 2 y 3 (país, email, claves de duplicados, fecha futura, cantidad 0, body vacío, doble cobro) están en `src/transform/reglas.py`, y cada una tiene pruebas con los casos borde del catálogo en `tests/test_reglas.py`, que GitHub Actions ejecuta en cada push (D-31).
+
 ## 2. Limpieza y normalización (vistas `*_changes`)
 
 | Entidad | Campo | Regla | Ejemplo |

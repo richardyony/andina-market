@@ -1,0 +1,36 @@
+# Revisión automática en cada push y pull request: compila todo el código y ejecuta las pruebas
+# unitarias (reglas de limpieza, máscaras, ingesta y controles del agente) con Spark local.
+# No necesita credenciales: no se conecta a Azure ni a Databricks.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"         # requerido por Spark 4
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Compilar todo el código Python
+        run: python -m compileall -q src data_generator tests
+
+      - name: Pruebas unitarias
+        run: pytest -v

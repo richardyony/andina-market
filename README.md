@@ -2,7 +2,7 @@
 
 Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde Azure SQL alimenta un lakehouse medallion en Unity Catalog, y de ahí salen la analítica, el feature store, RAG y los agentes.
 
-> **Estado:** en construcción. Los 6 niveles completos: base de origen con datos sintéticos, ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, modelo estrella en gold, capa de KPIs y dashboard de AI/BI, feature store point-in-time y dos modelos registrados con MLflow, una capa RAG evaluada con un golden set y un agente de soporte con herramientas de Unity Catalog, todo desplegado con un bundle y orquestado en jobs. Esta sección se actualiza por nivel.
+> **Estado:** los 6 niveles completos. Incluye la base de origen con datos sintéticos, la ingesta incremental hasta bronze, silver con calidad y SCD1/SCD2, el modelo estrella en gold, la capa de KPIs y el dashboard de AI/BI, el feature store point-in-time con dos modelos registrados en MLflow, una capa RAG evaluada con un golden set y un agente de soporte con herramientas de Unity Catalog. Todo se despliega con un bundle en dev y prod, se orquesta en jobs y tiene pruebas unitarias en GitHub Actions.
 
 | Nivel | Alcance | Estado |
 |---|---|---|
@@ -14,6 +14,8 @@ Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde 
 | 5. RAG | Documentos en un Volume, chunking por sección, Vector Search (Delta Sync), golden set con recall@k | ✅ |
 | 6. Agente | Agente de soporte con herramientas de Unity Catalog (datos del cliente, cálculos deterministas, RAG), controles de seguridad y escenarios de prueba | ✅ |
 
+**Por dónde empezar:** [arquitectura](docs/arquitectura.md) para la vista general y el [registro de decisiones](docs/decisiones.md) (D-01 a D-31) para el porqué de cada elección y la alternativa descartada.
+
 ## Estructura
 
 ```
@@ -21,7 +23,7 @@ source_db/          DDL de Azure SQL (esquema, FK legacy, Change Tracking)
 data_generator/     Generador de histórico, simulador de cambios, clickstream
 sample_data/        Muestra de eventos de clickstream (.jsonl)
 databricks.yml      Bundle (Declarative Automation Bundle): targets dev y prod
-resources/          Definición del job y del pipeline del bundle
+resources/          Jobs, pipeline y dashboard del bundle
 src/ingesta/        Notebooks de ingesta: extracción con CT → landing, Auto Loader → bronze
 src/transform/      Pipeline declarativo: silver (calidad, SCD1/SCD2), gold (modelo estrella) y capa de KPIs
 src/validacion/     Validación de punta a punta, última tarea del job
@@ -30,6 +32,10 @@ src/ml/             Feature store, entrenamiento con MLflow y puntuación batch 
 src/rag/            Ingesta e indexación de documentos, evaluación del retrieval (nivel 5)
 rag_docs/           Documentos de Andina Market para el RAG (políticas, FAQs, manuales)
 src/agent/          Herramientas del agente (funciones de UC), agente y escenarios de prueba (nivel 6)
+src/gobierno/       Funciones de máscara para datos personales (las crea el job antes del pipeline)
+tests/              Pruebas unitarias: reglas de limpieza, máscaras, ingesta y controles del agente
+.github/workflows/  CI: compila el código y ejecuta las pruebas en cada push
+scripts/            Preparar y limpiar Vector Search para una demo
 docs/               Decisiones de arquitectura y documentación de datos
 ```
 
@@ -120,6 +126,7 @@ Azure SQL (andina_oltp)                     Unity Catalog: <catalog> = andina_de
 - En Azure SQL, un usuario de solo lectura `databricks_reader` (`db_datareader` + `VIEW CHANGE TRACKING`, ver el final de `source_db/03_change_tracking.sql`).
 - Un Azure Key Vault con los secretos `server`, `database`, `user` y `password` de ese usuario, y un secret scope `andina-kv` respaldado por él ([D-17](docs/decisiones.md)).
 - Un service principal por entorno (`sp-andina-dev`, `sp-andina-prod`) con el derecho `workspace-access`, `ALL PRIVILEGES` solo sobre su catálogo, `READ` sobre el scope, y el rol `servicePrincipal.user` para quien despliega. El bundle los usa con `run_as`.
+- Un grupo del workspace `andina-pii-readers` con los dos service principals: son los únicos que ven nombre, email y teléfono reales en silver ([D-25](docs/decisiones.md)). Las funciones de máscara las crea el propio job.
 - [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html) autenticada contra el workspace (este proyecto usa `auth_type = azure-cli`).
 
 Los Volumes y las tablas de `ops` los crea el propio job si no existen.
@@ -254,6 +261,25 @@ databricks bundle run andina_agent -t dev
 
 Resultado: 11 de 11 escenarios; un filtro de alcance previo bloquea las preguntas ajenas (D-30), el agente escala el doble cobro real como urgente, calcula el envío a Arequipa con la regla de la política (7,90 USD) y no puede leer datos de otro cliente aunque se lo pidan. Después de usarlo, borrar el endpoint de Vector Search (se cobra por hora).
 
+Para una demo, el script `scripts/demo_vector_search.ps1` hace los dos pasos y confirma que no quede costo por hora:
+
+```powershell
+.\scripts\demo_vector_search.ps1 preparar -ConAgente   # recrea endpoint e índice y corre los escenarios
+.\scripts\demo_vector_search.ps1 limpiar               # borra índice y endpoint, con reintentos
+.\scripts\demo_vector_search.ps1 estado                # qué endpoints existen ahora
+```
+
+## Pruebas unitarias y CI
+
+Las reglas de limpieza viven en `src/transform/reglas.py`, un módulo sin dependencias del pipeline que importan tanto el pipeline como las pruebas. Las pruebas cubren los casos borde del catálogo (país sucio, emails, fecha en 2027, cantidad 0, body vacío, doble cobro), las máscaras de datos personales, los nombres de lote de la ingesta y los controles del agente (la sesión fija el cliente, lista blanca, parámetros SQL, filtro de alcance). Corren con Spark local, sin conectarse a Azure ni a Databricks ([D-31](docs/decisiones.md)).
+
+```powershell
+pip install -r requirements-dev.txt     # requiere Java 17
+pytest
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) compila todo el código y ejecuta las pruebas en cada push y pull request. Las validaciones con datos reales siguen en los jobs (`validar_lakehouse`, `validar_ml` y los escenarios del agente).
+
 ## Uso de IA
 
 Construido con Claude como asistente, que propuso código y documentación bajo mi dirección y revisión. Detalle por componente:
@@ -268,4 +294,5 @@ Construido con Claude como asistente, que propuso código y documentación bajo 
 - **Feature store y modelos del nivel 4:** el diseño (fotos semanales point-in-time, exclusión del segmento por fuga del futuro, validación temporal, línea base) y el código se generaron con Claude. Las métricas son las de la corrida real; el point-in-time se verificó con una consulta independiente.
 - **Capa RAG del nivel 5:** los 11 documentos de Andina Market se generaron con Claude a partir de los datos de la base (mismos métodos de pago, reglas de segmento, tipos de ticket y catálogo), como pide el reto. El pipeline, el golden set y la evaluación también. Las métricas son las reales; la evaluación guió dos mejoras (tablas linealizadas, vocabulario del cliente) y mostró una respuesta con un error que se documenta en lugar de esconderse.
 - **Agente del nivel 6 y promoción manual del modelo (D-26):** el agente, sus herramientas y los escenarios se generaron con Claude. Al leer las respuestas de la primera versión detecté que el agente inventaba la causa de un doble cobro y citaba políticas sin consultarlas; se corrigió llevando la regla a la herramienta y endureciendo las pruebas. La promoción de la v4 del modelo de recompra la decidí yo, después de pedir una evaluación con bootstrap por persona.
-- *(Se completa por nivel.)*
+- **Filtro de alcance del agente (D-30):** el agente seguía contestando preguntas ajenas al negocio. Pedí corregirlo y volver a correr los escenarios; Claude propuso el filtro de clasificación previo y agregó un escenario legítimo para comprobar que no bloquea de más.
+- **Pruebas unitarias y CI (D-31):** generadas con Claude. Para hacerlas posibles se separaron las reglas de limpieza en un módulo propio, sin cambiar el comportamiento del pipeline (verificado con una corrida completa del job). La revisión también detectó que las funciones de máscara no estaban en el repositorio; ahora las crea el job.

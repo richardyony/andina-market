@@ -1,0 +1,3 @@
+# Pruebas unitarias (tests/) en local y en GitHub Actions. Spark local necesita Java 17.
+pyspark==4.0.1
+pytest>=8.0

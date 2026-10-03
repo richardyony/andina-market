@@ -10,24 +10,9 @@ Bronze trae cada cambio de dbo.Customers tal cual llegó. Aquí:
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
+from reglas import country_iso, email_key, email_norm, email_valido, name_phone_key
+
 CATALOG = spark.conf.get("andina.catalog")  # noqa: F821 - `spark` lo inyecta el pipeline
-
-# Variantes de país vistas en la fuente (captura libre) → ISO-2.
-COUNTRY_ISO = {
-    "PE": "PE", "PERU": "PE",
-    "CO": "CO", "COLOMBIA": "CO",
-    "CL": "CL", "CHILE": "CL",
-    "MX": "MX", "MEX": "MX", "MEXICO": "MX",
-    "EC": "EC", "ECUADOR": "EC",
-}
-EMAIL_RE = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$"
-
-
-def country_iso(col):
-    """Mayúsculas, sin espacios ni tildes, y mapeo a ISO-2. Lo que no se reconoce queda NULL."""
-    key = F.translate(F.upper(F.trim(col)), "ÁÉÍÓÚ", "AEIOU")
-    mapping = F.create_map(*[F.lit(x) for kv in COUNTRY_ISO.items() for x in kv])
-    return mapping[key]
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +24,7 @@ def country_iso(col):
 @dp.expect("pais_reconocido", "country_raw IS NULL OR country_iso IS NOT NULL")
 @dp.expect("segmento_conocido", "segment IS NULL OR segment IN ('Nuevo','Regular','Frecuente','VIP')")
 def customers_changes():
-    email_norm = F.nullif(F.lower(F.trim("Email")), F.lit(""))
+    norm = email_norm(F.col("Email"))
     return (
         spark.readStream.table(f"{CATALOG}.bronze.customers")  # noqa: F821
         .select(
@@ -47,8 +32,8 @@ def customers_changes():
             F.trim("FirstName").alias("first_name"),
             F.trim("LastName").alias("last_name"),
             F.col("Email").alias("email"),
-            email_norm.alias("email_norm"),
-            email_norm.rlike(EMAIL_RE).alias("email_valido"),
+            norm.alias("email_norm"),
+            email_valido(norm).alias("email_valido"),
             F.col("Phone").alias("phone"),
             # Ciudad nula se reporta como "Desconocida" (catálogo de casos borde).
             F.when(F.col("_ct_operation") != "D", F.coalesce(F.trim("City"), F.lit("Desconocida"))).alias("city"),
@@ -141,13 +126,8 @@ dp.create_auto_cdc_flow(
 )
 def customer_duplicate_groups():
     c = spark.read.table("silver.customers")  # noqa: F821
-    # Solo emails con formato válido: valores de relleno como "sin-correo" no identifican a nadie.
-    email_key = F.when(F.col("email_valido"), F.regexp_replace("email_norm", r"\+[^@]*@", "@"))
-    phone_digits = F.regexp_replace("phone", r"[^0-9]", "")
-    name_phone_key = F.when(
-        F.length(phone_digits) > 0,
-        F.concat_ws("|", F.lower("first_name"), F.lower("last_name"), phone_digits),
-    )
+    by_email = email_key(F.col("email_norm"), F.col("email_valido"))
+    by_name_phone = name_phone_key(F.col("first_name"), F.col("last_name"), F.col("phone"))
 
     def groups(key, rule: str):
         return (
@@ -163,7 +143,7 @@ def customer_duplicate_groups():
             .withColumn("match_rule", F.lit(rule))
         )
 
-    return groups(email_key, "email").unionByName(groups(name_phone_key, "nombre_telefono"))
+    return groups(by_email, "email").unionByName(groups(by_name_phone, "nombre_telefono"))
 
 
 @dp.materialized_view(

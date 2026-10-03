@@ -8,6 +8,8 @@ resources:
       catalog: ${var.catalog}
       schema: silver            # esquema por defecto; las tablas usan nombres esquema.tabla
       serverless: true
+      # La carpeta queda en sys.path: los archivos del pipeline importan reglas.py (probado en tests/).
+      root_path: ../src/transform
       continuous: false
       channel: CURRENT
       configuration:

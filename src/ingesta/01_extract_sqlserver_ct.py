@@ -34,14 +34,13 @@ dbutils.widgets.text("simulate_failure", "")
 # COMMAND ----------
 
 import json
-import re
 import time
 from datetime import datetime, timezone
 
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
-from fuentes import LANDING_VOLUME, SECRET_SCOPE, select_tables
+from fuentes import LANDING_VOLUME, SECRET_SCOPE, lot_name, max_published_version, select_tables
 
 catalog = dbutils.widgets.get("catalog")
 tables = select_tables(dbutils.widgets.get("tables"))
@@ -154,16 +153,10 @@ print(f"Versión actual de Change Tracking: {to_version}")
 
 LANDING_ROOT = f"/Volumes/{catalog}/landing/{LANDING_VOLUME}"
 STAGING_ROOT = f"{LANDING_ROOT}/_staging"  # fuera de las carpetas que lee Auto Loader
-LOT_NAME = re.compile(r"^to_v(\d+)__")
 
 
 def quote(col: str) -> str:
     return f"[{col}]"
-
-
-def lot_name(to_v: int, mode: str) -> str:
-    """Nombre del lote: la versión de corte primero, así el lote se ordena y se reconoce."""
-    return f"to_v{to_v:012d}__{mode}__run_{batch_id}"
 
 
 def published_version(target: str):
@@ -177,8 +170,7 @@ def published_version(target: str):
         entries = dbutils.fs.ls(f"{LANDING_ROOT}/{target}")
     except Exception:  # noqa: BLE001 - la carpeta aún no existe
         return None
-    versions = [int(m.group(1)) for e in entries if (m := LOT_NAME.match(e.name.rstrip("/")))]
-    return max(versions) if versions else None
+    return max_published_version(e.name for e in entries)
 
 
 def extract(t: dict) -> dict:
@@ -251,7 +243,7 @@ def extract(t: dict) -> dict:
     # Lo que haya quedado en _staging de un intento fallido se descarta.
     staging_dir = f"{STAGING_ROOT}/{target}"
     dbutils.fs.rm(staging_dir, True)
-    name = lot_name(int(to_version), mode)
+    name = lot_name(int(to_version), mode, batch_id)
     staging = f"{staging_dir}/{name}"
     df = (
         read_sql(query)

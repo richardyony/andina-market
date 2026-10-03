@@ -33,6 +33,12 @@ resources:
           - ${workspace.current_user.userName}
 
       tasks:
+        - task_key: preparar_mascaras
+          description: Crea o actualiza las funciones de máscara que usa silver.customers (D-25)
+          notebook_task:
+            notebook_path: ../src/gobierno/00_crear_mascaras.py
+          timeout_seconds: 600
+
         - task_key: extract_sqlserver_ct
           description: Azure SQL → /Volumes/<catalog>/landing/sqlserver (Parquet por lote)
           notebook_task:
@@ -57,6 +63,7 @@ resources:
           description: bronze → silver → gold (Lakeflow Declarative Pipeline, nivel 2)
           depends_on:
             - task_key: bronze_autoloader
+            - task_key: preparar_mascaras
           pipeline_task:
             pipeline_id: ${resources.pipelines.andina_transform.id}
           timeout_seconds: 3600
