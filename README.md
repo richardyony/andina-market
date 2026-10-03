@@ -252,7 +252,7 @@ databricks bundle run andina_rag -t dev      # recrea el endpoint y el índice d
 databricks bundle run andina_agent -t dev
 ```
 
-Resultado: 8 de 9 escenarios; el agente escala el doble cobro real como urgente, calcula el envío a Arequipa con la regla de la política (7,90 USD) y no puede leer datos de otro cliente aunque se lo pidan. Después de usarlo, borrar el endpoint de Vector Search (se cobra por hora).
+Resultado: 11 de 11 escenarios; un filtro de alcance previo bloquea las preguntas ajenas (D-30), el agente escala el doble cobro real como urgente, calcula el envío a Arequipa con la regla de la política (7,90 USD) y no puede leer datos de otro cliente aunque se lo pidan. Después de usarlo, borrar el endpoint de Vector Search (se cobra por hora).
 
 ## Uso de IA
 

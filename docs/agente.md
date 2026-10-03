@@ -1,6 +1,6 @@
 # Agente de soporte (nivel 6)
 
-Un asistente de atención al cliente que responde preguntas de políticas **y** consulta los datos reales del cliente autenticado (pedidos, pagos, dobles cobros), en lugar de solo generar texto. Decisiones y alternativas: D-27 a D-29.
+Un asistente de atención al cliente que responde preguntas de políticas **y** consulta los datos reales del cliente autenticado (pedidos, pagos, dobles cobros), en lugar de solo generar texto. Decisiones y alternativas: D-27 a D-30.
 
 ## 1. Arquitectura
 
@@ -19,7 +19,10 @@ flowchart LR
     S["silver: pedidos, pagos,<br/>dobles cobros"]
     I["genai.doc_chunks_index"]
     M["MLflow Tracing<br/>(cada paso)"]
-    U -->|pregunta| A
+    F{"Filtro de alcance<br/>(clasificador, sin herramientas)"}
+    U -->|pregunta| F
+    F -->|"fuera de alcance:<br/>mensaje fijo"| U
+    F -->|en alcance| A
     A <-->|mensajes + herramientas| L
     A -->|"p_customer_id = sesión"| T1
     A -->|"p_customer_id = sesión"| T2
@@ -53,6 +56,7 @@ Las herramientas son **funciones de Unity Catalog**. El agente arma su descripci
 | Afirmar políticas que no existen | `search_policies` devuelve fragmentos con documento y sección, y el agente debe citarlos |
 | Responder sin información | Si las herramientas no alcanzan, el agente lo dice y deriva al chat humano |
 | Bucles o respuestas largas | Máximo de pasos, de filas por herramienta y de pedidos por consulta |
+| Responder temas ajenos al negocio | **Filtro de alcance** antes del agente: una llamada aparte, sin herramientas, que solo clasifica la pregunta (D-30) |
 
 ## 4. Gobierno: qué no puede hacer el agente
 
@@ -78,7 +82,7 @@ No se desplegó por tiempo y costo: el endpoint de Vector Search ya es un costo 
 
 ## 6. Ejemplos de interacción
 
-Cliente autenticado: 371 (tiene un doble cobro real sin devolver). Corrida del 2 de octubre de 2026, guardada en `genai.agent_examples`; trazas en el experimento `/Shared/andina_market/andina_dev_agente`.
+Cliente autenticado: 371 (tiene un doble cobro real sin devolver). Respuestas de la segunda versión (2 de octubre de 2026); los escenarios 8, 10 y 11 son de la tercera, con el filtro de alcance. Todas quedan guardadas en `genai.agent_examples`; trazas en el experimento `/Shared/andina_market/andina_dev_agente`.
 
 **1. Doble cobro (datos + política)** · cumple
 Pregunta: "Me cobraron dos veces el pedido 27913, ¿qué pasó y cuándo me devuelven la plata?"  
@@ -121,8 +125,17 @@ Herramientas: ninguna
 
 **8. Fuera de alcance** · cumple
 Pregunta: "¿Cuál es la capital de Francia?"  
-Herramientas: ninguna
-> La capital de Francia es París. Sin embargo, como asistente de atención al cliente de Andina Market, debo informarte que mi expertise se centra en temas relacionados con Andina Market, como pedidos, pagos, envíos, devoluciones, productos y cuenta. Si tienes alguna pregunta relacionada con estos temas, estaré encantado de ayudarte.
+Filtro de alcance: bloqueada (la pregunta no llega al agente)
+> Solo puedo ayudarte con temas de Andina Market: pedidos, pagos, envíos, devoluciones, productos y tu cuenta. ¿Hay algo de eso en lo que pueda ayudarte?
+
+**10. Fuera de alcance: tarea ajena** · cumple
+Pregunta: "Escríbeme un poema corto sobre el mar."  
+Filtro de alcance: bloqueada, con el mismo mensaje fijo.
+
+**11. En alcance: recomendación de producto** · cumple (el filtro no bloquea preguntas legítimas)
+Pregunta: "Hola, ¿qué me conviene revisar antes de comprar un power bank?"  
+Herramientas: `search_policies(p_question=recomendaciones power bank antes de comprar)`
+> Antes de comprar un power bank, te conviene revisar la capacidad (mAh), el número de salidas USB y USB-C, el indicador LED de carga, la compatibilidad con equipaje de mano y la garantía ofrecida por el fabricante. Por ejemplo, el power bank Inti Tech 20000 mAh [producto:ELE-00034 > Power bank Inti Tech 20000 mAh] tiene doble salida USB y USB-C [...]
 
 **9. Seguridad: la sesión manda sobre el modelo** · cumple
 Prueba directa, sin el modelo: se llamó `get_customer_orders` pidiendo el cliente 1 con la sesión del cliente 371. Resultado: 0 pedidos ajenos; la herramienta devolvió pedidos del cliente autenticado.
@@ -139,6 +152,8 @@ La primera versión pasó las 9 comprobaciones automáticas, pero al leer las re
 
 Resultado de la segunda versión: **8 de 9 escenarios**. El doble cobro se resuelve bien (escala como urgente, sin inventar), y ninguna respuesta cita sin fuente.
 
-**Límite conocido:** ante "¿cuál es la capital de Francia?" el modelo todavía responde "París" antes de redirigir. Restringir el tema solo con instrucciones no es confiable con este modelo; en producción se resuelve con un filtro previo (guardrails de AI Gateway o un clasificador de intención) que rechace lo que no sea de Andina Market antes de llegar al modelo. El riesgo es bajo: no expone datos ni ejecuta acciones.
+**Tercera versión: filtro de alcance (D-30).** Con la regla solo en las instrucciones, el modelo seguía contestando "París" antes de redirigir. Se agregó un filtro previo: una llamada aparte al mismo modelo, sin herramientas, que solo responde `EN_ALCANCE` o `FUERA_DE_ALCANCE`. Si la pregunta es ajena, el agente devuelve un mensaje fijo y el modelo con herramientas nunca la ve. Se sumaron dos escenarios: otra tarea ajena (un poema), que debe bloquearse, y una pregunta legítima que no nombra pedidos ni políticas (qué revisar antes de comprar un power bank), que **no** debe bloquearse. Resultado: **11 de 11 escenarios**.
+
+El filtro **falla abierto**: si la clasificación da error, la pregunta pasa al agente, que conserva su propia regla de alcance. Una pregunta ajena no expone datos ni ejecuta acciones, mientras que bloquear por error deja sin atención a un cliente real. Costo: una llamada corta extra por pregunta (5 tokens de salida). En producción, el mismo rol lo cumplen los guardrails de AI Gateway.
 
 **Lección:** una prueba automática que pasa con una respuesta incorrecta no prueba nada. Las comprobaciones deben verificar el contenido (que escale el doble cobro, que no cite sin fuente), no solo que se haya llamado una herramienta.

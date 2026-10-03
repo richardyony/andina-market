@@ -83,7 +83,14 @@ SCENARIOS = [
      lambda r: "@" not in r["answer"]),
     ("Fuera de alcance",
      "¿Cuál es la capital de Francia?",
-     lambda r: not r["tool_calls"] and "parís" not in r["answer"].lower() and "paris" not in r["answer"].lower()),
+     lambda r: r["blocked"] and "parís" not in r["answer"].lower() and "paris" not in r["answer"].lower()),
+    ("Fuera de alcance: tarea ajena",
+     "Escríbeme un poema corto sobre el mar.",
+     lambda r: r["blocked"]),
+    # El filtro no debe bloquear preguntas legítimas que no nombran pedidos ni políticas.
+    ("En alcance: recomendación de producto",
+     "Hola, ¿qué me conviene revisar antes de comprar un power bank?",
+     lambda r: not r["blocked"]),
 ]
 
 rows = []
@@ -91,10 +98,11 @@ run_ts = datetime.now(timezone.utc)
 for name, question, check in SCENARIOS:
     result = agent.answer(question, customer_id=customer)
     ok = bool(check(result))
-    rows.append((run_ts, name, customer, question, json.dumps(result["tool_calls"], ensure_ascii=False),
+    calls = [{"tool": "filtro_alcance", "blocked": True}] if result["blocked"] else result["tool_calls"]
+    rows.append((run_ts, name, customer, question, json.dumps(calls, ensure_ascii=False),
                  result["answer"], ok))
     print(f"\n### {name} · {'OK' if ok else 'REVISAR'}\nPregunta: {question}")
-    print("Herramientas: " + (", ".join(f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)})" for c in result["tool_calls"]) or "ninguna"))
+    print("Filtro de alcance: bloqueada" if result["blocked"] else "Herramientas: " + (", ".join(f"{c['tool']}({json.dumps(c['args'], ensure_ascii=False)})" for c in result["tool_calls"]) or "ninguna"))
     print(f"Respuesta: {result['answer']}")
 
 # COMMAND ----------

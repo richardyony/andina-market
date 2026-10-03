@@ -288,4 +288,14 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **Trazabilidad:** MLflow Tracing guarda cada paso (pregunta, herramienta, argumentos, resultado, respuesta) en el experimento `/Shared/andina_market/<catalog>_agente`.
 - **Pruebas en cada versión:** el job `andina_agent` ejecuta escenarios normales y adversariales (otro cliente, inyección de instrucciones, fuera de alcance) con comprobaciones automáticas, y falla si el agente pudo leer datos de otro cliente.
 - **Reglas de negocio en la herramienta, no en el modelo:** la primera versión inventó la causa de un doble cobro y una cita. Ahora `get_order_payments` devuelve el siguiente paso calculado en SQL (`next_step`) y el modelo solo lo comunica. Las pruebas verifican el contenido de la respuesta (escalar como urgente, ninguna cita sin `search_policies`), no solo que se haya usado una herramienta.
-- **Límite conocido:** el control de alcance por instrucciones no es confiable (el agente aún contesta preguntas ajenas antes de redirigir). En producción, un filtro previo (guardrails de AI Gateway o un clasificador de intención) antes del modelo.
+- **Alcance:** con la regla solo en las instrucciones, el agente contestaba preguntas ajenas antes de redirigir. Se resolvió con un filtro previo (D-30).
+
+## D-30. Filtro de alcance antes del agente
+
+- **Decisión:** antes del bucle del agente, una llamada aparte al mismo LLM, **sin herramientas y con un prompt de solo clasificación**, responde `EN_ALCANCE` o `FUERA_DE_ALCANCE`. Si es fuera de alcance, el agente devuelve un mensaje fijo y la pregunta nunca llega al modelo con herramientas.
+- **Por qué funciona donde las instrucciones fallaban:** a un modelo que responde, la regla "solo temas de Andina" compite con su tendencia a ayudar (contestaba "París" y después redirigía). Un clasificador que solo puede emitir una etiqueta no tiene cómo "ayudar".
+- **Qué cuenta como en alcance:** también los pedidos de datos de otro cliente y los intentos de cambiar las reglas, para que los rechace el agente con sus controles (D-29) y no un mensaje genérico. Se prueba que el filtro no bloquee preguntas legítimas (qué revisar antes de comprar un power bank).
+- **Falla abierta:** si la clasificación da error, la pregunta pasa. El riesgo de una pregunta ajena es bajo (no expone datos ni ejecuta acciones); bloquear por error deja sin atención a un cliente.
+- **Resultado:** 11 de 11 escenarios (antes 8 de 9), incluidos dos fuera de alcance y uno legítimo que no debe bloquearse.
+- **Descartado: endurecer más el prompt del agente.** Ya se había intentado y el modelo seguía contestando; además mezcla dos tareas en una llamada.
+- **Descartado por ahora: guardrails de AI Gateway.** Es la opción de producción (configurable sin código y con tablas de inferencia), pero requiere desplegar el agente en Model Serving, que quedó como diseño. El filtro en el código cumple el mismo papel y se prueba en el job.
