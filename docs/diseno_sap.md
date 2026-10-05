@@ -18,30 +18,33 @@ Extensión de diseño del nivel 1 (sin implementación). Andina Market tiene el 
 ```mermaid
 flowchart LR
     subgraph ONPREM["Red on-premise de Andina Market"]
+        direction TB
         SAP[("SAP ECC<br/>ODP / ODQ<br/>extractores 0VENDOR_*, 2LIS_02_*")]
         SHIR["Self-hosted Integration Runtime<br/>(VM Windows + SAP .NET Connector)"]
         SAP <-->|RFC, puertos 33xx<br/>usuario técnico| SHIR
     end
 
     subgraph AZURE["Azure"]
+        direction TB
         KV["Key Vault<br/>credenciales SAP"]
         ADF["Azure Data Factory<br/>conector SAP CDC<br/>(mapping data flow)"]
         subgraph ADLS["ADLS Gen2 standinamarket706"]
             LS["landing/sap/&lt;objeto&gt;/&lt;run_id&gt;/<br/>Parquet (Volume externo)"]
         end
+        KV --> ADF --> LS
     end
 
     subgraph DBX["Databricks · Unity Catalog"]
+        direction TB
         JOB["Lakeflow Job<br/>trigger: llegada de archivos"]
         BR["bronze.sap_*<br/>append-only + metadatos"]
         SV["silver.suppliers (SCD2)<br/>silver.purchase_orders"]
         GD["gold: gasto por proveedor,<br/>cumplimiento de entregas"]
+        JOB --> BR --> SV --> GD
     end
 
-    SHIR -->|HTTPS 443 saliente<br/>VPN / ExpressRoute| ADF
-    KV --> ADF
-    ADF --> LS
-    LS -->|Auto Loader| JOB --> BR --> SV --> GD
+    ONPREM -->|"SHIR → ADF: HTTPS 443 saliente<br/>VPN / ExpressRoute"| AZURE
+    AZURE -->|"landing/sap → Auto Loader"| DBX
 ```
 
 ### Por qué Azure Data Factory con el conector SAP CDC

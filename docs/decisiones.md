@@ -312,3 +312,39 @@ Surgió de una revisión de seguridad del nivel 2: el pipeline leía Azure SQL c
 - **Descartado: pruebas de integración en CI contra Databricks.** Requieren credenciales en GitHub y cómputo en cada push. Para un reto con un solo desarrollador, las validaciones de los jobs cumplen ese papel; en un equipo, un job de CI desplegaría el bundle en un target de pruebas con un service principal propio.
 - **Descartado: probar los archivos del pipeline directamente.** Dependen de `dp` y de la sesión que inyecta el pipeline; separar las reglas es más simple y deja el pipeline como pura declaración de tablas.
 
+## D-32. Shuffle: sin ajuste manual, se delega en AQE de serverless
+
+- **Contexto:** el código no fuerza ningún shuffle (no hay `repartition` ni hints de `broadcast`), pero varias operaciones lo generan de forma implícita: `Window.partitionBy` para quedarse con la última versión de Change Tracking y para detectar doble cobro, los `join` (incluidos los `left_anti` de huérfanos y DELETE), los `groupBy`/`distinct` de los agregados gold y las features de ML, y AUTO CDC por clave dentro del pipeline declarativo.
+- **Decisión:** no ajustar `spark.sql.shuffle.partitions` ni poner hints en producción. Todo corre en serverless, donde Adaptive Query Execution (AQE) está siempre activo: convierte en broadcast los joins contra tablas pequeñas (productos, duplicados, mapa cliente→persona), junta las particiones pequeñas después del shuffle y divide las particiones con sesgo (skew).
+- **Por qué:** el volumen es de miles de filas. Un ajuste manual agrega configuración que hay que mantener y no da una mejora medible; además, un valor fijo de particiones queda mal cuando el volumen cambia, mientras que AQE decide en cada ejecución con estadísticas reales.
+- **Única excepción: las pruebas.** `tests/conftest.py` fija `spark.sql.shuffle.partitions = 1` porque con datos de pocas filas las 200 particiones por defecto solo crean tareas vacías y hacen lenta la suite local.
+- **Si el volumen crece:** primero medir en el query profile o el Spark UI qué etapas tienen shuffle grande o skew. Luego, en ese orden, liquid clustering en silver por `customer_id`/`order_id` (reduce lo que se lee y se mueve en los joins y MERGE), hint de `broadcast` en dimensiones que AQE no detecte y, solo con evidencia, ajuste de particiones.
+- **Descartado: tuning manual desde el inicio** (`shuffle.partitions`, `repartition` por clave, hints de broadcast). Es optimización sin medición: más complejidad y riesgo de empeorar cuando cambie el volumen.
+
+## D-33. Clickstream en tiempo real: Event Hubs y Structured Streaming (solo diseño)
+
+- **Decisión:** la app envía los eventos a una API de ingesta, que los publica en Azure Event Hubs con protocolo Kafka (clave de partición `session_id`, retención de 7 días). Un pipeline declarativo los lee con Structured Streaming: bronze guarda el JSON crudo append-only con offset y partición, y silver tipa, desanida y deduplica. El diseño completo está en `docs/diseno_streaming.md`.
+- **Diagrama:** `docs/diagramas/streaming.png` (fuente Mermaid en la sección 2 de `docs/diseno_streaming.md`).
+- **Casos de la muestra que resuelve:** duplicados del SDK con `dropDuplicatesWithinWatermark(event_id)`; eventos tardíos con watermark de 6 horas sobre `event_ts` (el máximo observado) y un recálculo diario de gold para los que lleguen después, que bronze siempre guarda; usuarios anónimos conservados y asociados por `session_id` si luego inician sesión; deriva de esquema (`campaign`) sin detener el flujo porque bronze guarda el JSON crudo; JSON inválido a cuarentena.
+- **Exactly-once:** el checkpoint guarda los offsets y el estado de deduplicación, y Delta escribe de forma transaccional, así que un reinicio no duplica ni pierde eventos. Event Hubs cumple el papel de landing: si el consumidor falla, se reprocesa desde ahí.
+- **Trigger:** bronze continuo cada minuto; silver y gold continuos solo si el negocio necesita el funnel al minuto, si no `availableNow` cada 15 minutos. El código es el mismo; cambia el costo.
+- **Descartado: Kafka propio (HDInsight o brokers en VMs).** Más control, pero hay que operar los brokers. Confluent Cloud sería válido si la empresa ya lo usa.
+- **Descartado: que la app escriba directo en Event Hubs.** Obligaría a repartir credenciales dentro de la app; la API autentica al dispositivo y agrega `received_ts`.
+- **Descartado: llevar pedidos y pagos a streaming.** Para analítica y ML basta una latencia de minutos a una hora (D-11); el streaming se justifica en el clickstream, donde el valor está en reaccionar durante la sesión.
+
+![Diagrama de la ingesta del clickstream en tiempo real](diagramas/streaming.png)
+
+## D-34. SAP ECC on-premise: Azure Data Factory con el conector SAP CDC (solo diseño)
+
+- **Decisión:** Azure Data Factory con el conector SAP CDC lee los extractores ODP de proveedores (`0VENDOR_ATTR`) y órdenes de compra (`2LIS_02_*`) a través de un Self-hosted Integration Runtime instalado en la red on-premise, y deja Parquet en un Volume externo `landing/sap`. Desde ahí el camino es el mismo que Azure SQL: Auto Loader, bronze append-only con metadatos, silver y gold. El diseño completo está en `docs/diseno_sap.md`.
+- **Diagrama:** `docs/diagramas/sap.png` (fuente Mermaid en la sección 2 de `docs/diseno_sap.md`).
+- **Por qué:** la cola ODQ de SAP entrega solo los cambios con su tipo (alta, modificación, borrado), que es el equivalente de Change Tracking (D-03). El SHIR solo abre conexiones salientes por HTTPS, así que SAP no queda expuesto. ADF es un servicio gestionado de Azure con credenciales en Key Vault (D-17).
+- **Orquestación desacoplada:** ADF corre en su schedule y el job de Databricks se dispara por llegada de archivos a `landing/sap`. Proveedores, diaria; órdenes de compra, cada hora en horario laboral.
+- **Integración con el modelo:** proveedores como SCD2 en silver, montos convertidos a USD (D-05) y una tabla de correspondencia material SAP → SKU; los materiales sin correspondencia van a cuarentena, no se descartan.
+- **Minimización:** no se extraen datos bancarios de proveedores (`LFBK`); lo que no entra al lakehouse no hay que protegerlo.
+- **Descartado: conector SAP Table de ADF.** No tiene delta y obliga a releer tablas completas.
+- **Descartado: SAP SLT.** Latencia casi real, pero requiere licencia, un servidor adicional y triggers en la base del ERP. Se justifica si el negocio necesita las órdenes en minutos.
+- **Descartado: SAP Datasphere o Business Data Cloud.** Camino oficial hacia Databricks, pero orientado a S/4HANA; para un ECC on-premise implica un proyecto mayor.
+- **Riesgo a validar:** la nota SAP 3255746 restringe el uso de las APIs RFC de ODP por terceros. Si el contrato no lo cubre, se usa SLT o Datasphere y el resto de la arquitectura no cambia.
+
+![Diagrama de la integración de SAP ECC on-premise](diagramas/sap.png)
