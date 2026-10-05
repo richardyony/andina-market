@@ -2,7 +2,7 @@
 
 Este documento es el diagrama propio que pide el reto para el nivel 1, con las decisiones de infraestructura (workspace, almacenamiento, permisos y costos) y por qué esta arquitectura se ajusta a Andina Market. El detalle de cada decisión está en el [registro de decisiones](decisiones.md); los diseños de las fuentes no implementadas están en [streaming](diseno_streaming.md) y [SAP](diseno_sap.md).
 
-Los diagramas están en Mermaid: GitHub los muestra como imagen y se versionan junto con el código.
+Los diagramas están en Mermaid: GitHub los muestra como imagen y se versionan junto con el código. También están exportados a PNG en [diagramas/](diagramas/) (`arquitectura_general.png`, `ingesta_secuencia.png`, `infraestructura.png`, más `streaming.png` y `sap.png` de los diseños), para verlos fuera de GitHub o imprimirlos.
 
 ## 1. Vista general
 
@@ -108,6 +108,7 @@ flowchart TB
             SQLS[("sql-andina-cus<br/>Central US<br/>andina_oltp · oferta gratuita")]
             ST[("standinamarket706<br/>ADLS Gen2 · East US<br/>contenedor lakehouse")]
             AC["ac-andina-market<br/>Access Connector<br/>identidad administrada"]
+            KV["kv-andina-8346<br/>Key Vault (RBAC)<br/>credenciales de databricks_reader"]
         end
         subgraph RG2["recursos_richard"]
             WS["ws_richard<br/>Databricks Premium · East US<br/>Secure Cluster Connectivity"]
@@ -123,6 +124,7 @@ flowchart TB
     WS --- MS
     SRV -->|JDBC 1433, TLS<br/>firewall: servicios de Azure| SQLS
     SRV -->|lee credenciales| SEC
+    SEC -->|Key Vault Secrets User| KV
     SRV -->|abfss vía Unity Catalog| ST
 ```
 

@@ -14,7 +14,7 @@ Plataforma de datos de punta a punta sobre Azure y Databricks: la ingesta desde 
 | 5. RAG | Documentos en un Volume, chunking por sección, Vector Search (Delta Sync), golden set con recall@k | ✅ |
 | 6. Agente | Agente de soporte con herramientas de Unity Catalog (datos del cliente, cálculos deterministas, RAG), controles de seguridad y escenarios de prueba | ✅ |
 
-**Por dónde empezar:** [arquitectura](docs/arquitectura.md) para la vista general y el [registro de decisiones](docs/decisiones.md) (D-01 a D-31) para el porqué de cada elección y la alternativa descartada.
+**Por dónde empezar:** [arquitectura](docs/arquitectura.md) para la vista general y el [registro de decisiones](docs/decisiones.md) (D-01 a D-34) para el porqué de cada elección y la alternativa descartada.
 
 ## Estructura
 
@@ -103,7 +103,15 @@ python -m data_generator.simulate_changes --schema-change  # + columna nueva en 
 
 ## Cómo reproducir: ingesta (nivel 1)
 
-Diagramas completos en [docs/arquitectura.md](docs/arquitectura.md). Resumen:
+Diagrama de la arquitectura (fuente Mermaid y explicación en [docs/arquitectura.md](docs/arquitectura.md); las cinco imágenes están en [docs/diagramas/](docs/diagramas/)):
+
+![Arquitectura de Andina Market: fuentes, transporte, capas en Unity Catalog y consumo](docs/diagramas/arquitectura_general.png)
+
+Una corrida del job `andina_ingesta`, paso a paso:
+
+![Secuencia de una corrida de la ingesta: extracción con Change Tracking, landing y Auto Loader a bronze](docs/diagramas/ingesta_secuencia.png)
+
+Resumen en texto:
 
 ```
 Azure SQL (andina_oltp)                     Unity Catalog: <catalog> = andina_dev | andina_prod
