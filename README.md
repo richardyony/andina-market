@@ -169,6 +169,10 @@ Resultado de la prueba del 29/09/2026: la carga completa dejó en bronze exactam
 
 El pipeline `andina_transform` (Lakeflow Declarative Pipelines, serverless) se despliega con el mismo bundle y corre como tercera tarea del job `andina_ingesta`. Etapas, diagrama del modelo y manejo de cambios en el tiempo: [docs/modelo_datos.md](docs/modelo_datos.md).
 
+Modelo de datos resultante (estrella en gold; `dim_customer` con el segmento en SCD2 y los hechos unidos a la versión vigente en la fecha del pedido):
+
+![Modelo estrella de gold: dim_date, dim_customer y dim_product con los hechos fact_order_lines, fact_orders y fact_payments](docs/diagramas/modelo_estrella.png)
+
 ```powershell
 databricks bundle deploy -t dev
 databricks bundle run andina_ingesta -t dev      # extracción → bronze → silver → gold

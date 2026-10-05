@@ -27,7 +27,37 @@ flowchart LR
 
 Todo vive en **un solo pipeline de Lakeflow Declarative Pipelines** (`andina_transform`): el motor deduce las dependencias entre tablas, ejecuta en orden, registra las métricas de calidad y vuelve a calcular solo lo necesario. El job `andina_ingesta` lo ejecuta como tercera tarea, después de bronze.
 
+### Por qué las etapas están organizadas así
+
+Cada etapa existe porque resuelve un problema que la anterior no puede resolver, y el orden sale de qué necesita ver cada una.
+
+1. **Bronze separado de silver: separar "qué llegó" de "qué es verdad".** Bronze guarda cada cambio sin interpretar y es append-only, así que es la historia completa de la fuente. Si mañana cambia una regla de limpieza, silver y gold se recalculan desde bronze (*full refresh* del pipeline) sin volver a consultar el OLTP ni perder nada. Si la limpieza ocurriera al ingerir, un error de regla quedaría grabado para siempre.
+
+2. **Validar antes de aplicar el cambio, no después.** Las vistas `*_changes` normalizan y aplican las expectations a **cada cambio individual**, con su operación (`I`, `U`, `D`), antes de que AUTO CDC lo aplique sobre el estado actual. Si se validara después, un cambio inválido ya habría pisado la fila buena; por ejemplo, una línea que pasa a cantidad 0 habría reemplazado la cantidad anterior. Son vistas temporales (no se publican), así que no duplican almacenamiento ni crean una tabla intermedia que nadie consume.
+
+3. **Silver por entidad, sin mezclar entidades.** Una tabla por entidad, con su clave, su estado actual (SCD1) y, donde importa, su historial (SCD2). Es la capa reutilizable: ML, RAG y el agente leen silver y cada uno arma los cruces que necesita. Si silver ya mezclara entidades para un caso de uso, los demás heredarían ese diseño.
+
+4. **La calidad entre entidades va después de silver, como etapa propia.** Las reglas de una sola fila (email, país, PK nula) se evalúan en el paso 2. Pero las que cruzan entidades, como líneas con producto inexistente, total del pedido distinto a la suma de sus líneas, pedidos sin líneas, clientes duplicados o dobles cobros, necesitan ver **varias tablas en su estado actual**, y eso no existe hasta que silver está consolidado. Por eso son vistas materializadas que leen silver. Además **marcan, no modifican**: silver sigue diciendo lo que dice la fuente, y la explicación vive en `data_quality_issues` y en las tablas de cuarentena.
+
+5. **Gold solo lee silver, nunca bronze.** La limpieza se define una sola vez, en silver. Si gold leyera bronze, cada hecho repetiría las reglas y tarde o temprano dos tablas limpiarían distinto. Gold se dedica a una sola cosa: dar forma de estrella al consumo analítico (claves sustitutas, grano explícito y join point-in-time con la versión del cliente).
+
+6. **Streaming hasta silver, vistas materializadas después.** Bronze crece en cada lote y solo agrega filas, así que silver lo procesa de forma incremental (solo lo nuevo) con streaming y AUTO CDC. La calidad entre entidades y gold, en cambio, necesitan el estado completo (cruces, agregados y vigencias), así que son vistas materializadas: el motor las recalcula, de forma incremental cuando puede, y el resultado es siempre el mismo para los mismos datos (idempotente).
+
+7. **Todo en un solo pipeline, ejecutado justo después de bronze.** El motor deduce el orden desde las dependencias, refresca gold solo si silver cambió y registra las métricas de calidad en un único event log. Al correr como tarea del mismo job, gold siempre refleja el mismo lote que acaba de llegar a bronze, y la tarea siguiente (`validar_lakehouse`) comprueba que cuadre.
+
+**Alternativas de organización descartadas:**
+
+| Alternativa | Por qué no |
+|---|---|
+| Menos etapas: de bronze directo a un gold que limpia y modela a la vez | Mezcla dos responsabilidades. Cada hecho repetiría las reglas de limpieza, y ML y RAG no tendrían una capa limpia por entidad para consumir |
+| Más etapas: publicar una silver "cruda tipada" y otra "limpia" | Duplica almacenamiento y tablas sin que nadie consuma la intermedia. Las vistas temporales `*_changes` cumplen ese papel sin publicarse |
+| Validar después de AUTO CDC | Un cambio inválido ya habría reemplazado el estado bueno (el caso de la cantidad 0) |
+| La calidad entre entidades dentro de las vistas de silver | Las reglas que cruzan tablas no se pueden evaluar fila a fila sobre un stream; necesitan el estado consolidado |
+| Un pipeline para silver y otro para gold | Se pierde el grafo completo: habría que orquestar a mano cuándo refrescar gold. Se separarían solo si tuvieran dueños o frecuencias distintas (D-12) |
+
 ## 2. Modelo estrella (gold)
+
+También exportado como imagen: [diagramas/modelo_estrella.png](diagramas/modelo_estrella.png).
 
 ```mermaid
 erDiagram
